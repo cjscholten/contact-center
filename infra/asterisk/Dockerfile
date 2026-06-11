@@ -1,4 +1,6 @@
-FROM debian:12-slim
+# Ubuntu als basis: Asterisk is uit de stabiele Debian-releases verwijderd,
+# Ubuntu 24.04 LTS levert Asterisk 20 (LTS) uit universe.
+FROM ubuntu:24.04
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         asterisk \

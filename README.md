@@ -21,7 +21,7 @@ Beller (PSTN) → Twilio-trunk → AudioCodes SBC → Asterisk
 | Map | Inhoud |
 |---|---|
 | `backend/` | ASP.NET Core backend met eigen dunne ARI-client |
-| `infra/` | Dockerfile + configuratie voor Asterisk (Debian 12, Asterisk 20) |
+| `infra/` | Dockerfile + configuratie voor Asterisk (Ubuntu 24.04, Asterisk 20) |
 | `poc-agent/` | Kale browser-agent (statisch HTML + SIP.js) voor de POC |
 
 ## POC draaien
