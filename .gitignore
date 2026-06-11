@@ -1,0 +1,16 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Node
+node_modules/
+dist/
+
+# Claude Code (lokale instellingen)
+.claude/settings.local.json
+
+# Diversen
+.DS_Store
+*.log

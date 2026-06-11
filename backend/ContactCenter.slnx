@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ContactCenter.Api/ContactCenter.Api.csproj" />
+  </Folder>
+</Solution>

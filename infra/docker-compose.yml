@@ -1,0 +1,9 @@
+# Draai dit op een Linux-host (VM naast de SBC, of WSL2 met
+# networkingMode=mirrored). network_mode: host vermijdt alle
+# NAT-problemen met SIP/RTP en werkt niet op Docker Desktop/Windows.
+services:
+  asterisk:
+    build: ./asterisk
+    container_name: cc-asterisk
+    network_mode: host
+    restart: unless-stopped
