@@ -48,12 +48,11 @@ NSG-regels voor de VM:
 
 | Poort | Bron | Doel |
 |---|---|---|
-| 5060/udp | alleen SBC-subnet (privé) | SIP-trunk-leg — niet publiek openzetten |
-| 10000–10100/udp | SBC-subnet + jouw publieke IP | RTP/WebRTC-media |
-| 8088/tcp | alleen jouw publieke IP | ARI + agent-WebSocket |
-| 22/tcp | alleen jouw publieke IP | beheer |
+| 10000–10100/udp | jouw publieke IP | WebRTC-media agent |
+| 8088/tcp | jouw publieke IP | ARI + agent-WebSocket |
+| 22/tcp | jouw publieke IP | beheer |
 
-Een Asterisk met 5060 open op een publiek IP wordt binnen minuten gevonden door SIP-scanners — de trunk-leg privé houden is geen nice-to-have.
+De trunk-leg (5060 + RTP vanaf de SBC) hoeft géén eigen regels: dat is VNet-intern verkeer en valt onder de standaardregel `AllowVnetInBound`; internet wordt door `DenyAllInBound` geblokkeerd. Kanttekening: dat vangnet werkt alleen zolang er geen brede allow-regels bij komen. Vóór er echte nummers aan hangen: een expliciet allow/deny-paar voor 5060 (allow vanaf SBC-subnet, deny voor de rest) toevoegen. Een Asterisk met 5060 open op een publiek IP wordt binnen minuten gevonden door SIP-scanners.
 
 `network_mode: host` werkt niet op Docker Desktop voor Windows; lokaal draaien kan alleen via WSL2 met `networkingMode=mirrored`, maar met de SBC in Azure is de VM-route de logische.
 
