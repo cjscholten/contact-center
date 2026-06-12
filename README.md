@@ -12,16 +12,16 @@ Beller (PSTN) → Twilio-trunk → AudioCodes SBC → Asterisk
                               Agent-app & beheeromgeving (React, later)
 ```
 
-- **Asterisk doet media, de backend beslist.** Inkomende gesprekken landen in een ARI Stasis-app (`contactcenter`); de backend speelt de welkomsttekst af en stuurt het gesprek naar een `app_queue`-wachtrij.
+- **Asterisk doet media, de backend beslist.** Inkomende gesprekken landen in een ARI Stasis-app (`contactcenter`); de backend zoekt op het gebelde nummer de wachtrijconfiguratie op in PostgreSQL en beslist: welkomsttekst + wachtrij, gesloten-melding, of doorschakelen.
 - Agents bellen via de browser (WebRTC, SIP.js) rechtstreeks met Asterisk.
-- Wachtrijmechanica (wachtmuziek, positie-meldingen, agentselectie) komt van `app_queue`; openingstijden, teksten, ad-hoc sluiting en nawerktijd worden backend-logica.
+- Wachtrijmechanica (wachtmuziek, positie-meldingen, agentselectie) komt van `app_queue`; openingstijden, teksten en ad-hoc sluiting/doorschakeling staan in de database (zie "Wachtrijconfiguratie"); nawerktijd volgt in de volgende fase.
 
 ## Mappen
 
 | Map | Inhoud |
 |---|---|
-| `backend/` | ASP.NET Core backend met eigen dunne ARI-client |
-| `infra/` | Dockerfile + configuratie voor Asterisk (Ubuntu 24.04, Asterisk 20) |
+| `backend/` | ASP.NET Core backend: ARI-client, wachtrijbeslissingen (EF Core/PostgreSQL) + unit-tests |
+| `infra/` | Docker-opzet voor Asterisk (Ubuntu 24.04, Asterisk 20) en PostgreSQL 17 |
 | `poc-agent/` | Kale browser-agent (statisch HTML + SIP.js) voor de POC |
 
 ## POC draaien
@@ -50,6 +50,7 @@ NSG-regels voor de VM:
 |---|---|---|
 | 10000–10100/udp | jouw publieke IP | WebRTC-media agent |
 | 8088/tcp | jouw publieke IP | ARI + agent-WebSocket |
+| 5432/tcp | jouw publieke IP | PostgreSQL (zolang de backend op de dev-machine draait) |
 | 22/tcp | jouw publieke IP | beheer |
 
 De trunk-leg (5060 + RTP vanaf de SBC) hoeft géén eigen regels: dat is VNet-intern verkeer en valt onder de standaardregel `AllowVnetInBound`; internet wordt door `DenyAllInBound` geblokkeerd. Kanttekening: dat vangnet werkt alleen zolang er geen brede allow-regels bij komen. Vóór er echte nummers aan hangen: een expliciet allow/deny-paar voor 5060 (allow vanaf SBC-subnet, deny voor de rest) toevoegen. Een Asterisk met 5060 open op een publiek IP wordt binnen minuten gevonden door SIP-scanners.
@@ -69,10 +70,10 @@ Windows-snelstart: zet eenmalig het publieke IP van de VM in `vm-ip.txt` (gitign
 
 ```powershell
 cd backend
-dotnet run --project src/ContactCenter.Api
+dotnet run --project src/ContactCenter.Api -- --VmHost=<publiek-IP-VM>
 ```
 
-Draait de backend op je dev-machine en Asterisk in Azure? Zet dan `Ari:BaseUrl` in `src/ContactCenter.Api/appsettings.json` op `http://<publiek-IP-VM>:8088/ari/`. Log toont "Verbonden met ARI-events" als de koppeling staat. Healthcheck: `http://localhost:5080/health`.
+`--VmHost` wijst zowel ARI als PostgreSQL naar de VM; zonder die parameter gelden de localhost-waarden uit `appsettings.json`. Log toont "Verbonden met ARI-events" en "Database gemigreerd en gereed" als beide koppelingen staan. Healthcheck: `http://localhost:5080/health`. Bij de eerste start worden de migraties uitgevoerd en wordt wachtrij `support` geseed (24/7 open, testnummer +19205008321).
 
 Let op: ARI gaat dan met basic auth over onversleuteld http het internet over. Voor de POC acceptabel zolang 8088 in de NSG op jouw IP staat dichtgetimmerd; daarna backend in Azure draaien of TLS op de Asterisk-HTTP-server zetten.
 
@@ -89,12 +90,47 @@ Open de pagina via `http://localhost:…` (microfoontoegang vereist localhost of
 
 Bel een testnummer van de trunk. Verwacht: welkomsttekst ("thank you for your patience"), wachtmuziek, agent-pagina toont "inkomend gesprek", aannemen → spraakverbinding.
 
+## Wachtrijconfiguratie (PostgreSQL)
+
+De routering is data: een inkomend nummer (`InboundNumbers`) wijst naar een wachtrij (`Queues`) met openingstijden (`OpeningHoursWindow`), prompts en ad-hoc-instellingen. De backend leest dit per gesprek — wijzigingen gelden direct voor het volgende gesprek, zonder herstart.
+
+Beheren kan (tot de beheeromgeving er is) via psql op de VM:
+
+```bash
+sudo docker exec -it cc-postgres psql -U cc -d contactcenter
+```
+
+```sql
+-- ad-hoc sluiten / heropenen (gesloten-tekst voor de beller)
+UPDATE "Queues" SET "AdHocClosed" = true  WHERE "Name" = 'support';
+UPDATE "Queues" SET "AdHocClosed" = false WHERE "Name" = 'support';
+
+-- ad-hoc sluiting mét doorschakeling naar een extern nummer
+UPDATE "Queues" SET "AdHocClosed" = true, "AdHocForwardNumber" = '+31201234567'
+WHERE "Name" = 'support';
+
+-- openingstijden: bv. doordeweeks 09:00-17:00 (dag: 0=zondag ... 6=zaterdag)
+DELETE FROM "OpeningHoursWindow" WHERE "QueueConfigId" = 1;
+INSERT INTO "OpeningHoursWindow" ("QueueConfigId", "Day", "Opens", "Closes")
+SELECT 1, d, '09:00', '17:00' FROM generate_series(1, 5) AS d;
+
+-- extra nummer naar een wachtrij routeren
+INSERT INTO "InboundNumbers" ("Number", "QueueConfigId") VALUES ('+31858001234', 1);
+```
+
+Aandachtspunten:
+
+- **Nieuwe wachtrij** = rij in `Queues` (naam in `[a-z0-9]`) **én** een gelijknamig blok in `infra/asterisk/conf/queues.conf` (wachtmuziek en positie-meldingen staan daar; de wachtrij-engine wordt later dynamisch). `sales` staat als tweede wachtrij al klaar in queues.conf.
+- **Doorschakelen** belt uit via de trunk en vereist een uitgaande route op de SBC (Asterisk IP Group → Twilio); die bestaat nog niet, dus dit pad is nog ongetest.
+- Onbekend nummer → melding "not in service" + ophangen. Database onbereikbaar → terugval: alles naar `support` met de standaard-welkomsttekst.
+
 ## Dev-wachtwoorden
 
-`changeme-dev` staat in `infra/asterisk/conf/ari.conf`, `pjsip.conf` en `backend/.../appsettings.json` — alleen voor de POC, vervangen zodra dit een omgeving met echte nummers wordt.
+`changeme-dev` staat in `infra/asterisk/conf/ari.conf`, `pjsip.conf`, `infra/docker-compose.yml` (postgres) en `backend/.../appsettings.json` — alleen voor de POC, vervangen zodra dit een omgeving met echte nummers wordt.
 
 ## Bewuste POC-beperkingen
 
-- Eén vaste wachtrij (`support`) met één statisch agent-account; Engelstalige standaardprompts.
-- Geen openingstijden, nawerktijd, doorverbinden of login — dat is de volgende fase (PostgreSQL-config, agent-statusmachine, Keycloak, React-apps).
+- Wachtrijen in queues.conf zijn statisch (`support`, `sales`); de wachtrij-engine (wachtmuziek, positie-meldingen, leden) wordt later dynamisch.
+- Eén statisch agent-account; Engelstalige standaardprompts (eigen NL-teksten volgen met de beheeromgeving).
+- Geen nawerktijd, doorverbinden of login — dat is de volgende fase (agent-statusmachine, Keycloak, React-apps).
 - `ws://` en dev-wachtwoorden; TLS/wss en TURN (coturn, voor thuiswerkers) volgen na de POC.

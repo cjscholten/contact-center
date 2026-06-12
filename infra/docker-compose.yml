@@ -7,3 +7,18 @@ services:
     container_name: cc-asterisk
     network_mode: host
     restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    container_name: cc-postgres
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: contactcenter
+      POSTGRES_USER: cc
+      POSTGRES_PASSWORD: changeme-dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

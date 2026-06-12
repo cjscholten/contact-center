@@ -16,10 +16,10 @@ echo Backend en agent-pagina starten voor Asterisk op %VM_IP% ...
 
 where wt >nul 2>nul
 if errorlevel 1 (
-    start "CC backend" cmd /k dotnet run --project "%~dp0backend\src\ContactCenter.Api" -- --Ari:BaseUrl=http://%VM_IP%:8088/ari/
+    start "CC backend" cmd /k dotnet run --project "%~dp0backend\src\ContactCenter.Api" -- --VmHost=%VM_IP%
     start "CC agent-pagina" cmd /k npx --yes serve "%~dp0poc-agent" -l 3000
 ) else (
-    wt --window new new-tab --suppressApplicationTitle --title "CC backend" -d "%~dp0." cmd /k dotnet run --project backend\src\ContactCenter.Api -- --Ari:BaseUrl=http://%VM_IP%:8088/ari/ ; split-pane -H --suppressApplicationTitle --title "CC agent-pagina" -d "%~dp0." cmd /k npx --yes serve poc-agent -l 3000
+    wt --window new new-tab --suppressApplicationTitle --title "CC backend" -d "%~dp0." cmd /k dotnet run --project backend\src\ContactCenter.Api -- --VmHost=%VM_IP% ; split-pane -H --suppressApplicationTitle --title "CC agent-pagina" -d "%~dp0." cmd /k npx --yes serve poc-agent -l 3000
 )
 
 ping -n 4 127.0.0.1 >nul
