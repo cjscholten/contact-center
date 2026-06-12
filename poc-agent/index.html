@@ -46,7 +46,6 @@ $('connect').onclick = async () => {
   const host = $('host').value.trim();
   const user = $('user').value.trim();
   const pass = $('pass').value;
-  localStorage.setItem('cc-host', host);
 
   simpleUser = new Web.SimpleUser(`ws://${host}:8088/ws`, {
     aor: `sip:${user}@${host}`,
@@ -79,6 +78,7 @@ $('connect').onclick = async () => {
     setStatus('verbinden…');
     await simpleUser.connect();
     await simpleUser.register();
+    localStorage.setItem('cc-host', host);
     setStatus('geregistreerd, wacht op gesprek');
   } catch (e) {
     setStatus('fout: ' + e.message);
