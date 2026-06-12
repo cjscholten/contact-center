@@ -65,6 +65,8 @@ De trunk-leg (5060 + RTP vanaf de SBC) hoeft géén eigen regels: dat is VNet-in
 
 ### 3. Backend starten
 
+Windows-snelstart: zet eenmalig het publieke IP van de VM in `vm-ip.txt` (gitignored) in de repo-root en dubbelklik `start-poc.cmd` — dat opent backend en agent-pagina elk in een eigen venster plus de browser. Handmatig:
+
 ```powershell
 cd backend
 dotnet run --project src/ContactCenter.Api

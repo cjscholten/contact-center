@@ -11,6 +11,9 @@ dist/
 # Claude Code (lokale instellingen)
 .claude/settings.local.json
 
+# Omgevingsspecifiek (publiek IP van de Asterisk-VM)
+vm-ip.txt
+
 # Diversen
 .DS_Store
 *.log
