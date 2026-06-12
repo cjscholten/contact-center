@@ -6,6 +6,8 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
 {
     public DbSet<QueueConfig> Queues => Set<QueueConfig>();
     public DbSet<InboundNumber> InboundNumbers => Set<InboundNumber>();
+    public DbSet<Agent> Agents => Set<Agent>();
+    public DbSet<GlobalSettings> Settings => Set<GlobalSettings>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -28,6 +30,23 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
         {
             e.Property(n => n.Number).HasMaxLength(20);
             e.HasIndex(n => n.Number).IsUnique();
+        });
+
+        modelBuilder.Entity<Agent>(e =>
+        {
+            e.Property(a => a.Name).HasMaxLength(40);
+            e.HasIndex(a => a.Name).IsUnique();
+            e.Property(a => a.DisplayName).HasMaxLength(100);
+            e.Property(a => a.Endpoint).HasMaxLength(60);
+            e.HasMany(a => a.QueueAssignments).WithOne().HasForeignKey(qa => qa.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentQueueAssignment>(e =>
+        {
+            e.HasKey(qa => new { qa.AgentId, qa.QueueConfigId });
+            e.HasOne(qa => qa.Queue).WithMany().HasForeignKey(qa => qa.QueueConfigId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

@@ -38,26 +38,55 @@ public static class DatabaseInitializer
 
     private static async Task SeedAsync(CcDbContext db, ILogger logger)
     {
-        if (await db.Queues.AnyAsync())
-            return;
-
-        var support = new QueueConfig
+        if (!await db.Queues.AnyAsync())
         {
-            Name = "support",
-            DisplayName = "Support",
-            Numbers = [new InboundNumber { Number = "+19205008321" }],
-            OpeningHours = Enum.GetValues<DayOfWeek>()
-                .Select(day => new OpeningHoursWindow
-                {
-                    Day = day,
-                    Opens = new TimeOnly(0, 0),
-                    Closes = new TimeOnly(23, 59, 59),
-                })
-                .ToList(),
-        };
+            var support = new QueueConfig
+            {
+                Name = "support",
+                DisplayName = "Support",
+                Numbers = [new InboundNumber { Number = "+19205008321" }],
+                OpeningHours = Enum.GetValues<DayOfWeek>()
+                    .Select(day => new OpeningHoursWindow
+                    {
+                        Day = day,
+                        Opens = new TimeOnly(0, 0),
+                        Closes = new TimeOnly(23, 59, 59),
+                    })
+                    .ToList(),
+            };
 
-        db.Queues.Add(support);
-        await db.SaveChangesAsync();
-        logger.LogInformation("Wachtrij 'support' geseed met nummer +19205008321 (24/7 open)");
+            db.Queues.Add(support);
+            await db.SaveChangesAsync();
+            logger.LogInformation("Wachtrij 'support' geseed met nummer +19205008321 (24/7 open)");
+        }
+
+        if (!await db.Agents.AnyAsync())
+        {
+            var queueIds = await db.Queues.ToDictionaryAsync(q => q.Name, q => q.Id);
+            db.Agents.AddRange(
+                new Agent
+                {
+                    Name = "agent1001",
+                    DisplayName = "Agent 1001",
+                    Endpoint = "PJSIP/agent1001",
+                    QueueAssignments = [.. queueIds.Values.Select(id => new AgentQueueAssignment { QueueConfigId = id })],
+                },
+                new Agent
+                {
+                    Name = "agent1002",
+                    DisplayName = "Agent 1002",
+                    Endpoint = "PJSIP/agent1002",
+                    QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueIds["support"] }],
+                });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Agents 'agent1001' en 'agent1002' geseed");
+        }
+
+        if (!await db.Settings.AnyAsync())
+        {
+            db.Settings.Add(new GlobalSettings { WrapUpSeconds = 30 });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Globale instellingen geseed (nawerktijd: 30s)");
+        }
     }
 }

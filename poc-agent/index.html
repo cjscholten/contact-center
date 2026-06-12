@@ -9,7 +9,8 @@
   label { display: block; margin-bottom: .5rem; }
   input { width: 100%; padding: .4rem; box-sizing: border-box; }
   button { padding: .5rem 1.2rem; margin-right: .5rem; }
-  #status { font-weight: bold; }
+  #status, #agentStatus { font-weight: bold; }
+  #wrapupFinish { background: #2d7a2d; color: white; border: none; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -19,11 +20,14 @@
   <label>Asterisk-host <input id="host" value="localhost"></label>
   <label>Gebruiker <input id="user" value="agent1001"></label>
   <label>Wachtwoord <input id="pass" type="password" value="changeme-dev"></label>
-  <button id="connect">Verbinden</button>
+  <button id="connect">Aanmelden</button>
+  <button id="disconnect" disabled>Afmelden</button>
 </div>
 
 <div class="card">
-  <div>Status: <span id="status">niet verbonden</span></div>
+  <div>Agent-status: <span id="agentStatus">afgemeld</span></div>
+  <p><button id="wrapupFinish" hidden>Klaar — beschikbaar</button></p>
+  <div>Gesprek: <span id="status">—</span></div>
   <p>
     <button id="answer" disabled>Aannemen</button>
     <button id="hangup" disabled>Ophangen</button>
@@ -35,12 +39,33 @@
 <script type="module">
 import { Web } from 'https://cdn.jsdelivr.net/npm/sip.js@0.21.2/+esm';
 
+const API = 'http://localhost:5080';
+const STATUS_NL = { LoggedOut: 'afgemeld', Available: 'beschikbaar', OnCall: 'in gesprek', WrapUp: 'nawerktijd' };
+
 const $ = id => document.getElementById(id);
 const setStatus = t => { $('status').textContent = t; };
 let simpleUser;
+let agentName = null;
 
 const presetHost = new URLSearchParams(location.search).get('host') ?? localStorage.getItem('cc-host');
 if (presetHost) $('host').value = presetHost;
+
+async function api(path, method = 'POST') {
+  const response = await fetch(`${API}/api/agents/${agentName}/${path}`, { method });
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+  return response.json();
+}
+
+setInterval(async () => {
+  if (!agentName) return;
+  try {
+    const response = await fetch(`${API}/api/agents/${agentName}`);
+    if (!response.ok) return;
+    const snapshot = await response.json();
+    $('agentStatus').textContent = STATUS_NL[snapshot.status] ?? snapshot.status;
+    $('wrapupFinish').hidden = snapshot.status !== 'WrapUp';
+  } catch { /* backend even weg; volgende poll opnieuw */ }
+}, 2000);
 
 $('connect').onclick = async () => {
   const host = $('host').value.trim();
@@ -67,7 +92,7 @@ $('connect').onclick = async () => {
       $('hangup').disabled = false;
     },
     onCallHangup: () => {
-      setStatus('geregistreerd, wacht op gesprek');
+      setStatus('—');
       $('answer').disabled = true;
       $('hangup').disabled = true;
     },
@@ -78,11 +103,31 @@ $('connect').onclick = async () => {
     setStatus('verbinden…');
     await simpleUser.connect();
     await simpleUser.register();
+    agentName = user;
+    await api('login');
     localStorage.setItem('cc-host', host);
-    setStatus('geregistreerd, wacht op gesprek');
+    setStatus('—');
+    $('connect').disabled = true;
+    $('disconnect').disabled = false;
   } catch (e) {
+    agentName = null;
     setStatus('fout: ' + e.message);
   }
+};
+
+$('disconnect').onclick = async () => {
+  try { await api('logout'); } catch { /* backend weg; SIP toch afsluiten */ }
+  try { await simpleUser.unregister(); await simpleUser.disconnect(); } catch { }
+  agentName = null;
+  $('agentStatus').textContent = 'afgemeld';
+  $('wrapupFinish').hidden = true;
+  $('connect').disabled = false;
+  $('disconnect').disabled = true;
+  setStatus('—');
+};
+
+$('wrapupFinish').onclick = async () => {
+  try { await api('wrapup/finish'); } catch (e) { setStatus('fout: ' + e.message); }
 };
 
 $('answer').onclick = () => simpleUser.answer();

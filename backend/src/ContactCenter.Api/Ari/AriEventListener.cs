@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text.Json;
+using ContactCenter.Api.Agents;
 using ContactCenter.Api.CallFlow;
 using Microsoft.Extensions.Options;
 
@@ -8,6 +9,7 @@ namespace ContactCenter.Api.Ari;
 public sealed class AriEventListener(
     IOptions<AriOptions> options,
     InboundCallHandler callHandler,
+    AgentStateService agentStates,
     ILogger<AriEventListener> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -39,8 +41,11 @@ public sealed class AriEventListener(
     {
         var baseUri = new Uri(opts.BaseUrl.EndsWith('/') ? opts.BaseUrl : opts.BaseUrl + "/");
         var scheme = baseUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
+        // subscribeAll: ook events van kanalen buiten de Stasis-app (de agent-legs),
+        // nodig om gespreksbegin/-einde per agent te zien voor de statusmachine
         return new Uri($"{scheme}://{baseUri.Authority}{baseUri.AbsolutePath}events" +
                        $"?app={Uri.EscapeDataString(opts.AppName)}" +
+                       $"&subscribeAll=true" +
                        $"&api_key={Uri.EscapeDataString($"{opts.Username}:{opts.Password}")}");
     }
 
@@ -88,6 +93,12 @@ public sealed class AriEventListener(
                 case "StasisEnd":
                     callHandler.OnStasisEnd(evt);
                     break;
+                case "ChannelStateChange" when ChannelState(evt) == "Up":
+                    await agentStates.HandleChannelUpAsync(ChannelName(evt), ct);
+                    break;
+                case "ChannelDestroyed":
+                    await agentStates.HandleChannelDestroyedAsync(ChannelName(evt), ct);
+                    break;
                 default:
                     logger.LogDebug("ARI-event {Type} genegeerd", type);
                     break;
@@ -98,4 +109,10 @@ public sealed class AriEventListener(
             logger.LogError(ex, "Fout bij verwerken van ARI-event {Type}", type);
         }
     }
+
+    private static string ChannelName(JsonElement evt)
+        => evt.GetProperty("channel").GetProperty("name").GetString()!;
+
+    private static string ChannelState(JsonElement evt)
+        => evt.GetProperty("channel").GetProperty("state").GetString()!;
 }
