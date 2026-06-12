@@ -23,5 +23,5 @@ if errorlevel 1 (
 )
 
 ping -n 4 127.0.0.1 >nul
-start http://localhost:3000
+start http://localhost:3000/?host=%VM_IP%
 endlocal

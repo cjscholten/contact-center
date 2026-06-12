@@ -32,18 +32,23 @@
 
 <audio id="remoteAudio" autoplay></audio>
 
-<script src="https://cdn.jsdelivr.net/npm/sip.js@0.21.2/dist/sip.min.js"></script>
-<script>
+<script type="module">
+import { Web } from 'https://cdn.jsdelivr.net/npm/sip.js@0.21.2/+esm';
+
 const $ = id => document.getElementById(id);
 const setStatus = t => { $('status').textContent = t; };
 let simpleUser;
+
+const presetHost = new URLSearchParams(location.search).get('host') ?? localStorage.getItem('cc-host');
+if (presetHost) $('host').value = presetHost;
 
 $('connect').onclick = async () => {
   const host = $('host').value.trim();
   const user = $('user').value.trim();
   const pass = $('pass').value;
+  localStorage.setItem('cc-host', host);
 
-  simpleUser = new SIP.Web.SimpleUser(`ws://${host}:8088/ws`, {
+  simpleUser = new Web.SimpleUser(`ws://${host}:8088/ws`, {
     aor: `sip:${user}@${host}`,
     userAgentOptions: {
       authorizationUsername: user,

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "poc-agent",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "poc-agent", "-l", "3210"],
+      "port": 3210
+    }
+  ]
+}
