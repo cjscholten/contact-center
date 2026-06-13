@@ -1,21 +1,26 @@
-using ContactCenter.Api.Ami;
 using ContactCenter.Api.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.Agents;
 
 /// <summary>
-/// Statusmachine per agent: LoggedOut → Available → OnCall → WrapUp → Available.
-/// Status leeft in-memory (herstart backend = iedereen uitgelogd); wachtrij-
-/// lidmaatschap wordt via AMI in Asterisk gespiegeld.
+/// Statusmachine per agent: LoggedOut → Available → Ringing → OnCall → WrapUp → Available.
+/// Status leeft in-memory (herstart backend = iedereen uitgelogd). De CallCoordinator
+/// bestuurt de gesprekken; deze service kent alleen agent-status en nawerktijd, en meldt
+/// via OnAgentAvailable wanneer er werk verdeeld kan worden.
 /// </summary>
 public sealed class AgentStateService(
-    IQueueMemberControl queues,
     IDbContextFactory<CcDbContext> dbFactory,
     ILogger<AgentStateService> logger)
 {
     private const int DefaultWrapUpSeconds = 30;
-    private const string WrapUpPauseReason = "nawerktijd";
+
+    /// <summary>
+    /// Niet-blokkerend signaal dat er werk te verdelen valt (een agent werd beschikbaar).
+    /// De CallCoordinator hangt hier een coalescing-trigger aan; bewust geen await, zodat
+    /// dit veilig vanuit elke status-overgang kan worden aangeroepen zonder lock-cykel.
+    /// </summary>
+    public Action? RequestDispatch { get; set; }
 
     private sealed class RuntimeState
     {
@@ -40,9 +45,13 @@ public sealed class AgentStateService(
         if (agent is null)
             return null;
 
+        AgentSnapshot snapshot;
         await _gate.WaitAsync(ct);
         try
         {
+            if (_loggedIn.TryGetValue(name, out var existing))
+                existing.WrapUpTimer?.Cancel();
+
             var state = new RuntimeState
             {
                 Name = agent.Name,
@@ -50,23 +59,18 @@ public sealed class AgentStateService(
                 Endpoint = agent.Endpoint,
                 QueueNames = [.. agent.QueueAssignments.Select(qa => qa.Queue!.Name)],
             };
-
-            foreach (var queue in state.QueueNames)
-                await queues.AddAsync(queue, state.Endpoint, state.DisplayName, ct);
-
-            // her-login reset een eventuele nawerktijd-pauze
-            if (_loggedIn.TryGetValue(name, out var previous))
-                await CancelWrapUpAsync(previous, ct);
-
             _loggedIn[name] = state;
-            logger.LogInformation("Agent {Agent} ingelogd in wachtrijen: {Queues}",
+            logger.LogInformation("Agent {Agent} ingelogd, wachtrijen: {Queues}",
                 name, string.Join(", ", state.QueueNames));
-            return Snapshot(state);
+            snapshot = Snapshot(state);
         }
         finally
         {
             _gate.Release();
         }
+
+        RequestDispatch?.Invoke();
+        return snapshot;
     }
 
     public async Task<AgentSnapshot?> LogoutAsync(string name, CancellationToken ct = default)
@@ -76,11 +80,7 @@ public sealed class AgentStateService(
         {
             if (!_loggedIn.Remove(name, out var state))
                 return null;
-
             state.WrapUpTimer?.Cancel();
-            foreach (var queue in state.QueueNames)
-                await queues.RemoveAsync(queue, state.Endpoint, ct);
-
             state.Status = AgentStatus.LoggedOut;
             state.Since = DateTimeOffset.UtcNow;
             logger.LogInformation("Agent {Agent} uitgelogd", name);
@@ -92,67 +92,100 @@ public sealed class AgentStateService(
         }
     }
 
+    /// <summary>Reserveert atomair een beschikbare agent in één van de wachtrijen (status → Ringing).</summary>
+    public async Task<ReservedAgent?> TryReserveForCallAsync(IReadOnlyCollection<string> queueNames,
+        CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var state = _loggedIn.Values.FirstOrDefault(s =>
+                s.Status == AgentStatus.Available && s.QueueNames.Any(queueNames.Contains));
+            if (state is null)
+                return null;
+            SetStatus(state, AgentStatus.Ringing);
+            return new ReservedAgent(state.Name, state.Endpoint);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public Task ConfirmOnCallAsync(string name, CancellationToken ct = default)
+        => TransitionAsync(name, AgentStatus.OnCall, ct);
+
+    /// <summary>Originate mislukte of werd niet beantwoord: agent weer beschikbaar.</summary>
+    public async Task ReleaseReservationAsync(string name, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_loggedIn.TryGetValue(name, out var state) && state.Status == AgentStatus.Ringing)
+                SetStatus(state, AgentStatus.Available);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+        RequestDispatch?.Invoke();
+    }
+
+    /// <summary>Gesprek beëindigd: start nawerktijd (of meteen beschikbaar als die 0 is).</summary>
+    public async Task BeginWrapUpAsync(string name, CancellationToken ct = default)
+    {
+        var seconds = await GetWrapUpSecondsAsync(ct);
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_loggedIn.TryGetValue(name, out var state) || state.Status == AgentStatus.LoggedOut)
+                return;
+            if (seconds <= 0)
+            {
+                SetStatus(state, AgentStatus.Available);
+            }
+            else
+            {
+                SetStatus(state, AgentStatus.WrapUp);
+                StartWrapUpTimer(state, TimeSpan.FromSeconds(seconds));
+                return;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+        RequestDispatch?.Invoke();
+    }
+
     /// <summary>Beëindigt de nawerktijd vroegtijdig (de "klaar"-knop).</summary>
     public async Task<AgentSnapshot?> FinishWrapUpAsync(string name, CancellationToken ct = default)
     {
+        AgentSnapshot? snapshot;
+        var becameAvailable = false;
         await _gate.WaitAsync(ct);
         try
         {
             if (!_loggedIn.TryGetValue(name, out var state))
                 return null;
             if (state.Status == AgentStatus.WrapUp)
-                await CancelWrapUpAsync(state, ct);
-            return Snapshot(state);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task HandleChannelUpAsync(string channelName, CancellationToken ct = default)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            var state = FindByChannel(channelName);
-            if (state is null || state.Status == AgentStatus.OnCall)
-                return;
-
-            state.WrapUpTimer?.Cancel();
-            state.WrapUpTimer = null;
-            SetStatus(state, AgentStatus.OnCall);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task HandleChannelDestroyedAsync(string channelName, CancellationToken ct = default)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            var state = FindByChannel(channelName);
-            if (state is null || state.Status != AgentStatus.OnCall)
-                return;
-
-            var seconds = await GetWrapUpSecondsAsync(ct);
-            if (seconds <= 0)
             {
+                state.WrapUpTimer?.Cancel();
+                state.WrapUpTimer = null;
                 SetStatus(state, AgentStatus.Available);
-                return;
+                becameAvailable = true;
             }
-
-            await queues.SetPausedAsync(state.Endpoint, paused: true, WrapUpPauseReason, ct);
-            SetStatus(state, AgentStatus.WrapUp);
-            StartWrapUpTimer(state, TimeSpan.FromSeconds(seconds));
+            snapshot = Snapshot(state);
         }
         finally
         {
             _gate.Release();
         }
+
+        if (becameAvailable)
+            RequestDispatch?.Invoke();
+        return snapshot;
     }
 
     public async Task<AgentSnapshot?> GetAsync(string name, CancellationToken ct = default)
@@ -191,17 +224,17 @@ public sealed class AgentStateService(
         }
     }
 
-    private RuntimeState? FindByChannel(string channelName)
-        => _loggedIn.Values.FirstOrDefault(s => ChannelNames.BelongsToEndpoint(channelName, s.Endpoint));
-
-    private async Task CancelWrapUpAsync(RuntimeState state, CancellationToken ct)
+    private async Task TransitionAsync(string name, AgentStatus status, CancellationToken ct)
     {
-        state.WrapUpTimer?.Cancel();
-        state.WrapUpTimer = null;
-        if (state.Status == AgentStatus.WrapUp)
+        await _gate.WaitAsync(ct);
+        try
         {
-            await queues.SetPausedAsync(state.Endpoint, paused: false, WrapUpPauseReason, ct);
-            SetStatus(state, AgentStatus.Available);
+            if (_loggedIn.TryGetValue(name, out var state))
+                SetStatus(state, status);
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
@@ -218,7 +251,7 @@ public sealed class AgentStateService(
             }
             catch (OperationCanceledException)
             {
-                // vroegtijdig beëindigd via klaar-knop, nieuw gesprek of logout
+                // vroegtijdig beëindigd via knop, nieuw gesprek of logout
             }
             catch (Exception ex)
             {
@@ -253,3 +286,5 @@ public sealed class AgentStateService(
     private static AgentSnapshot Snapshot(RuntimeState state)
         => new(state.Name, state.DisplayName, state.Status, state.Since);
 }
+
+public sealed record ReservedAgent(string Name, string Endpoint);

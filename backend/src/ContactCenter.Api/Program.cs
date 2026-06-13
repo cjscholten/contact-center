@@ -2,7 +2,6 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Serialization;
 using ContactCenter.Api.Agents;
-using ContactCenter.Api.Ami;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
@@ -12,24 +11,16 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Dev-gemak: één parameter (--VmHost=x.x.x.x) wijst ARI, AMI en de
+// Dev-gemak: één parameter (--VmHost=x.x.x.x) wijst ARI en de
 // database naar de VM; de rest komt uit appsettings.json.
 var vmHost = builder.Configuration["VmHost"];
 if (!string.IsNullOrWhiteSpace(vmHost))
-{
     builder.Configuration["Ari:BaseUrl"] = $"http://{vmHost}:8088/ari/";
-    builder.Configuration["Ami:Host"] = vmHost;
-}
 
 builder.Services.AddOptions<AriOptions>()
     .Bind(builder.Configuration.GetSection(AriOptions.SectionName))
     .Validate(o => !string.IsNullOrWhiteSpace(o.BaseUrl), "Ari:BaseUrl is verplicht")
     .Validate(o => !string.IsNullOrWhiteSpace(o.Username), "Ari:Username is verplicht")
-    .ValidateOnStart();
-
-builder.Services.AddOptions<AmiOptions>()
-    .Bind(builder.Configuration.GetSection(AmiOptions.SectionName))
-    .Validate(o => !string.IsNullOrWhiteSpace(o.Username), "Ami:Username is verplicht")
     .ValidateOnStart();
 
 builder.Services.AddHttpClient<AriHttpClient>((sp, http) =>
@@ -40,6 +31,7 @@ builder.Services.AddHttpClient<AriHttpClient>((sp, http) =>
     var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{opts.Username}:{opts.Password}"));
     http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 });
+builder.Services.AddSingleton<IAriClient>(sp => sp.GetRequiredService<AriHttpClient>());
 
 var connectionString = builder.Configuration.GetConnectionString("ContactCenter");
 if (!string.IsNullOrWhiteSpace(vmHost))
@@ -47,8 +39,9 @@ if (!string.IsNullOrWhiteSpace(vmHost))
 
 builder.Services.AddDbContextFactory<CcDbContext>(o => o.UseNpgsql(connectionString));
 
-builder.Services.AddSingleton<IQueueMemberControl, AmiClient>();
 builder.Services.AddSingleton<AgentStateService>();
+builder.Services.AddSingleton<CallCoordinator>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CallCoordinator>());
 builder.Services.AddSingleton<QueueDecisionService>();
 builder.Services.AddSingleton<InboundCallHandler>();
 builder.Services.AddHostedService<AriEventListener>();

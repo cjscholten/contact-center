@@ -14,7 +14,7 @@ Beller (PSTN) → Twilio-trunk → AudioCodes SBC → Asterisk
 
 - **Asterisk doet media, de backend beslist.** Inkomende gesprekken landen in een ARI Stasis-app (`contactcenter`); de backend zoekt op het gebelde nummer de wachtrijconfiguratie op in PostgreSQL en beslist: welkomsttekst + wachtrij, gesloten-melding, of doorschakelen.
 - Agents bellen via de browser (WebRTC, SIP.js) rechtstreeks met Asterisk.
-- Wachtrijmechanica (wachtmuziek, positie-meldingen, agentselectie) komt van `app_queue`; openingstijden, teksten en ad-hoc sluiting/doorschakeling staan in de database (zie "Wachtrijconfiguratie"); nawerktijd volgt in de volgende fase.
+- **De wachtrij draait server-side via ARI** (geen `app_queue`): de backend houdt wachtende bellers in een holding-brug met wachtmuziek, belt een beschikbare agent (originate) en zet beller en agent bij opnemen samen in een mixing-brug. Dat geeft de backend volledige grip voor in de wacht zetten en doorverbinden. Openingstijden, teksten en ad-hoc sluiting/doorschakeling staan in de database (zie "Wachtrijconfiguratie").
 
 ## Mappen
 
@@ -51,8 +51,9 @@ NSG-regels voor de VM:
 | 10000–10100/udp | jouw publieke IP | WebRTC-media agent |
 | 8088/tcp | jouw publieke IP | ARI + agent-WebSocket |
 | 5432/tcp | jouw publieke IP | PostgreSQL (zolang de backend op de dev-machine draait) |
-| 5038/tcp | jouw publieke IP | AMI: wachtrijleden beheren (idem) |
 | 22/tcp | jouw publieke IP | beheer |
+
+(Poort 5038/AMI is niet meer nodig — de wachtrij draait nu via ARI; de NSG-regel mag weg.)
 
 De trunk-leg (5060 + RTP vanaf de SBC) hoeft géén eigen regels: dat is VNet-intern verkeer en valt onder de standaardregel `AllowVnetInBound`; internet wordt door `DenyAllInBound` geblokkeerd. Kanttekening: dat vangnet werkt alleen zolang er geen brede allow-regels bij komen. Vóór er echte nummers aan hangen: een expliciet allow/deny-paar voor 5060 (allow vanaf SBC-subnet, deny voor de rest) toevoegen. Een Asterisk met 5060 open op een publiek IP wordt binnen minuten gevonden door SIP-scanners.
 
@@ -121,29 +122,30 @@ INSERT INTO "InboundNumbers" ("Number", "QueueConfigId") VALUES ('+31858001234',
 
 Aandachtspunten:
 
-- **Nieuwe wachtrij** = rij in `Queues` (naam in `[a-z0-9]`) **én** een gelijknamig blok in `infra/asterisk/conf/queues.conf` (wachtmuziek en positie-meldingen staan daar; de wachtrij-engine wordt later dynamisch). `sales` staat als tweede wachtrij al klaar in queues.conf.
+- **Nieuwe wachtrij** = rij in `Queues` (naam in `[a-z0-9]`); de holding-brug en wachtmuziek worden door de backend aangemaakt. Wijs agents toe via `AgentQueueAssignment`.
 - **Doorschakelen** belt uit via de trunk en vereist een uitgaande route op de SBC (Asterisk IP Group → Twilio); die bestaat nog niet, dus dit pad is nog ongetest.
 - Onbekend nummer → melding "not in service" + ophangen. Database onbereikbaar → terugval: alles naar `support` met de standaard-welkomsttekst.
 
 ## Agents en nawerktijd
 
-Agents staan in de database (`Agents`, met wachtrij-toewijzingen in `AgentQueueAssignment`; geseed: `agent1001` in alle wachtrijen, `agent1002` in support). De agent-pagina meldt na de SIP-registratie de agent aan via de API; de backend zet hem dan met AMI als **dynamisch lid** in zijn wachtrijen. Statusverloop per agent: afgemeld → beschikbaar → in gesprek → **nawerktijd** → beschikbaar.
+Agents staan in de database (`Agents`, met wachtrij-toewijzingen in `AgentQueueAssignment`; geseed: `agent1001` in alle wachtrijen, `agent1002` in support). De agent-pagina meldt na de SIP-registratie de agent aan via de API; de backend ziet hem dan als beschikbaar voor zijn wachtrijen. Statusverloop per agent: afgemeld → beschikbaar → rinkelt → in gesprek → **nawerktijd** → beschikbaar.
 
+- Een wachtende beller wordt door de backend toegewezen aan een beschikbare agent: die wordt gebeld (de browser rinkelt), en bij opnemen komen beller en agent samen in een mixing-brug.
 - Nawerktijd is globaal instelbaar (`Settings.WrapUpSeconds`, geseed op 30; `0` = uit) en gaat per direct in:
   ```sql
   UPDATE "Settings" SET "WrapUpSeconds" = 60;
   ```
-- Tijdens nawerktijd is de agent in alle wachtrijen gepauzeerd; nieuwe gesprekken blijven in de wachtrij. De "Klaar"-knop op de agent-pagina (of het verstrijken van de timer) maakt de agent weer beschikbaar.
+- Tijdens nawerktijd is de agent niet kiesbaar voor nieuwe gesprekken; die blijven in de wacht. De "Klaar"-knop op de agent-pagina (of het verstrijken van de timer) maakt de agent weer beschikbaar.
 - Agent-API (nog zonder authenticatie): `GET /api/agents`, `GET/POST /api/agents/{naam}` + `/login`, `/logout`, `/wrapup/finish`.
 - Agentstatus leeft in-memory: backend-herstart = iedereen afgemeld (opnieuw aanmelden in de agent-pagina).
 
 ## Dev-wachtwoorden
 
-`changeme-dev` staat in `infra/asterisk/conf/ari.conf`, `manager.conf`, `pjsip.conf`, `infra/docker-compose.yml` (postgres) en `backend/.../appsettings.json` — alleen voor de POC, vervangen zodra dit een omgeving met echte nummers wordt.
+`changeme-dev` staat in `infra/asterisk/conf/ari.conf`, `pjsip.conf`, `infra/docker-compose.yml` (postgres) en `backend/.../appsettings.json` — alleen voor de POC, vervangen zodra dit een omgeving met echte nummers wordt.
 
 ## Bewuste POC-beperkingen
 
-- Wachtrijen in queues.conf zijn statisch (`support`, `sales`); de wachtrij-engine (wachtmuziek, positie-meldingen) wordt later dynamisch.
+- Wachtrijpositie-meldingen (kwamen van `app_queue`) zijn er tijdelijk uit door de overstap naar de server-side wachtrij; de backend kent de wachtlijst, dus ze komen later eenvoudig terug.
 - Twee vaste SIP-accounts (`agent1001`/`agent1002`); Engelstalige standaardprompts (eigen NL-teksten volgen met de beheeromgeving).
 - Agent-API zonder authenticatie en agentstatus in-memory; Keycloak en SignalR-push komen met de React-apps.
 - Doorverbinden (warm/koud) door de agent is de volgende fase.

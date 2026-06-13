@@ -6,13 +6,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.CallFlow;
 
+/// <summary>
+/// Handelt de inkomende beller af tot en met de keuze: welkomsttekst + in de wacht (via de
+/// CallCoordinator), gesloten-melding, of doorschakelen. Vanaf het moment dat de beller in de
+/// wacht staat neemt de CallCoordinator het over.
+/// </summary>
 public sealed class InboundCallHandler(
-    AriHttpClient ari,
+    IAriClient ari,
     IDbContextFactory<CcDbContext> dbFactory,
     QueueDecisionService decisions,
+    CallCoordinator coordinator,
     ILogger<InboundCallHandler> logger)
 {
-    private const string QueueContext = "cc-queues";
     private const string ForwardContext = "cc-forward";
     private const string UnknownNumberPrompt = "sound:ss-noservice";
 
@@ -21,13 +26,13 @@ public sealed class InboundCallHandler(
 
     private readonly ConcurrentDictionary<string, PendingAction> _afterPlayback = new();
 
-    private sealed record PendingAction(string ChannelId, CallAction Action);
+    private sealed record PendingAction(string ChannelId, CallAction Action, string CallerId);
 
     public async Task OnStasisStartAsync(JsonElement evt, CancellationToken ct)
     {
         var channel = evt.GetProperty("channel");
         var channelId = channel.GetProperty("id").GetString()!;
-        var caller = channel.GetProperty("caller").GetProperty("number").GetString();
+        var caller = channel.GetProperty("caller").GetProperty("number").GetString() ?? "";
         var dialed = channel.GetProperty("dialplan").GetProperty("exten").GetString()!;
 
         var action = await DecideAsync(dialed, ct);
@@ -42,10 +47,10 @@ public sealed class InboundCallHandler(
                 await ari.ContinueInDialplanAsync(channelId, ForwardContext, forward.Number, 1, ct);
                 break;
             case RouteToQueue route:
-                await PlayThenAsync(channelId, route.WelcomePrompt, route, ct);
+                await PlayThenAsync(channelId, route.WelcomePrompt, route, caller, ct);
                 break;
             case PlayAndHangup closed:
-                await PlayThenAsync(channelId, closed.Prompt, closed, ct);
+                await PlayThenAsync(channelId, closed.Prompt, closed, caller, ct);
                 break;
         }
     }
@@ -59,9 +64,7 @@ public sealed class InboundCallHandler(
         switch (pending.Action)
         {
             case RouteToQueue route:
-                logger.LogInformation("Kanaal {ChannelId} naar wachtrij '{Queue}'", pending.ChannelId, route.QueueName);
-                // dialplan-prefix 'q' vermijdt botsing met speciale extensions (h/i/t)
-                await ari.ContinueInDialplanAsync(pending.ChannelId, QueueContext, "q" + route.QueueName, 1, ct);
+                await coordinator.EnqueueCallerAsync(pending.ChannelId, route.QueueName, pending.CallerId, ct);
                 break;
             case PlayAndHangup:
                 logger.LogInformation("Kanaal {ChannelId} opgehangen na melding", pending.ChannelId);
@@ -75,13 +78,13 @@ public sealed class InboundCallHandler(
         var channelId = evt.GetProperty("channel").GetProperty("id").GetString()!;
         foreach (var stale in _afterPlayback.Where(p => p.Value.ChannelId == channelId).ToList())
             _afterPlayback.TryRemove(stale.Key, out _);
-        logger.LogInformation("Kanaal {ChannelId} heeft de applicatie verlaten", channelId);
     }
 
-    private async Task PlayThenAsync(string channelId, string prompt, CallAction action, CancellationToken ct)
+    private async Task PlayThenAsync(string channelId, string prompt, CallAction action, string callerId,
+        CancellationToken ct)
     {
         var playbackId = await ari.PlayAsync(channelId, prompt, ct);
-        _afterPlayback[playbackId] = new PendingAction(channelId, action);
+        _afterPlayback[playbackId] = new PendingAction(channelId, action, callerId);
     }
 
     private async Task<CallAction> DecideAsync(string dialed, CancellationToken ct)

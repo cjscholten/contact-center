@@ -4,6 +4,7 @@ public enum AgentStatus
 {
     LoggedOut,
     Available,
+    Ringing,  // gereserveerd voor een beller; originate loopt
     OnCall,
     WrapUp,
 }

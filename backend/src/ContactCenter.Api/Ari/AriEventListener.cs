@@ -1,6 +1,5 @@
 using System.Net.WebSockets;
 using System.Text.Json;
-using ContactCenter.Api.Agents;
 using ContactCenter.Api.CallFlow;
 using Microsoft.Extensions.Options;
 
@@ -9,7 +8,7 @@ namespace ContactCenter.Api.Ari;
 public sealed class AriEventListener(
     IOptions<AriOptions> options,
     InboundCallHandler callHandler,
-    AgentStateService agentStates,
+    CallCoordinator coordinator,
     ILogger<AriEventListener> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -84,20 +83,21 @@ public sealed class AriEventListener(
         {
             switch (type)
             {
+                case "StasisStart" when IsAgentLeg(evt):
+                    // door de backend gebelde agent heeft opgenomen
+                    await coordinator.OnAgentAnsweredAsync(ChannelId(evt), ct);
+                    break;
                 case "StasisStart":
                     await callHandler.OnStasisStartAsync(evt, ct);
                     break;
                 case "PlaybackFinished":
                     await callHandler.OnPlaybackFinishedAsync(evt, ct);
                     break;
+                case "ChannelDestroyed":
+                    await coordinator.OnChannelGoneAsync(ChannelId(evt), ct);
+                    break;
                 case "StasisEnd":
                     callHandler.OnStasisEnd(evt);
-                    break;
-                case "ChannelStateChange" when ChannelState(evt) == "Up":
-                    await agentStates.HandleChannelUpAsync(ChannelName(evt), ct);
-                    break;
-                case "ChannelDestroyed":
-                    await agentStates.HandleChannelDestroyedAsync(ChannelName(evt), ct);
                     break;
                 default:
                     logger.LogDebug("ARI-event {Type} genegeerd", type);
@@ -110,9 +110,13 @@ public sealed class AriEventListener(
         }
     }
 
-    private static string ChannelName(JsonElement evt)
-        => evt.GetProperty("channel").GetProperty("name").GetString()!;
+    private static string ChannelId(JsonElement evt)
+        => evt.GetProperty("channel").GetProperty("id").GetString()!;
 
-    private static string ChannelState(JsonElement evt)
-        => evt.GetProperty("channel").GetProperty("state").GetString()!;
+    /// <summary>Agent-legs worden door de backend ge-originate met appArg "agent".</summary>
+    private static bool IsAgentLeg(JsonElement evt)
+        => evt.TryGetProperty("args", out var args)
+           && args.ValueKind == JsonValueKind.Array
+           && args.GetArrayLength() > 0
+           && args[0].GetString() == "agent";
 }
