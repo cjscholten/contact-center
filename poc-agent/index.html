@@ -47,6 +47,37 @@ const setStatus = t => { $('status').textContent = t; };
 let simpleUser;
 let agentName = null;
 
+// Synthetische beltoon (WebAudio) — geen extern audiobestand nodig.
+// AudioContext mag pas na een user-gesture; "Aanmelden" telt als zodanig.
+let audioCtx;
+let ringTimer = null;
+function ensureAudio() {
+  audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function ringBurst() {
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 425; // NL-beltoonfrequentie
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.2, now + 0.05);
+  gain.gain.setValueAtTime(0.2, now + 0.95);
+  gain.gain.linearRampToValueAtTime(0, now + 1.0);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 1.0);
+}
+function startRinging() {
+  ensureAudio();
+  ringBurst();
+  ringTimer = setInterval(ringBurst, 3000); // 1s toon, 2s stilte
+}
+function stopRinging() {
+  if (ringTimer) { clearInterval(ringTimer); ringTimer = null; }
+}
+
 const presetHost = new URLSearchParams(location.search).get('host') ?? localStorage.getItem('cc-host');
 if (presetHost) $('host').value = presetHost;
 
@@ -85,14 +116,17 @@ $('connect').onclick = async () => {
     onCallReceived: () => {
       setStatus('inkomend gesprek…');
       $('answer').disabled = false;
+      startRinging();
     },
     onCallAnswered: () => {
       setStatus('in gesprek');
+      stopRinging();
       $('answer').disabled = true;
       $('hangup').disabled = false;
     },
     onCallHangup: () => {
       setStatus('—');
+      stopRinging();
       $('answer').disabled = true;
       $('hangup').disabled = true;
     },
@@ -118,6 +152,7 @@ $('connect').onclick = async () => {
 $('disconnect').onclick = async () => {
   try { await api('logout'); } catch { /* backend weg; SIP toch afsluiten */ }
   try { await simpleUser.unregister(); await simpleUser.disconnect(); } catch { }
+  stopRinging();
   agentName = null;
   $('agentStatus').textContent = 'afgemeld';
   $('wrapupFinish').hidden = true;
