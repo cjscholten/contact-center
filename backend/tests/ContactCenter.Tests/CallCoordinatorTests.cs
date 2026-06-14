@@ -6,14 +6,17 @@ namespace ContactCenter.Tests;
 
 public class CallCoordinatorTests
 {
-    private static (CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents) Build(int wrapUpSeconds)
+    private static (CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents) Build(
+        int wrapUpSeconds, params (string name, string[] queues)[] agents)
     {
+        if (agents.Length == 0)
+            agents = [("agent1001", ["support"])];
         var factory = new TestDbContextFactory();
-        factory.Seed(wrapUpSeconds, ("agent1001", ["support"]));
-        var agents = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
+        factory.Seed(wrapUpSeconds, agents);
+        var agentSvc = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
         var ari = new FakeAriClient();
-        var coordinator = new CallCoordinator(ari, agents, NullLogger<CallCoordinator>.Instance);
-        return (coordinator, ari, agents);
+        var coordinator = new CallCoordinator(ari, agentSvc, factory, NullLogger<CallCoordinator>.Instance);
+        return (coordinator, ari, agentSvc);
     }
 
     [Fact]
@@ -141,6 +144,43 @@ public class CallCoordinatorTests
         var (coordinator, _, agents) = Build(wrapUpSeconds: 0);
         await agents.LoginAsync("agent1001");
         Assert.False(await coordinator.HoldAsync("agent1001"));
+    }
+
+    [Fact]
+    public async Task Koud_doorverbinden_naar_wachtrij_herrouteert_beller_en_zet_agent_in_nawerktijd()
+    {
+        var (coordinator, ari, agents) = Build(30, ("agent1001", ["support"]), ("agent1002", ["sales"]));
+        await agents.LoginAsync("agent1001"); // agent1002 niet ingelogd → beller blijft in sales wachten
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+        await coordinator.TryDispatchAllAsync();
+        var agentChannel = ari.Originates.Single().ChannelId;
+        await coordinator.OnAgentAnsweredAsync(agentChannel);
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.ColdTransferAsync("agent1001", "sales"));
+
+        Assert.Contains(agentChannel, ari.Hangups);                         // agent-leg eruit
+        Assert.Contains(ari.Added, a => a.Channel == "caller-1");           // beller naar holding van sales
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
+    }
+
+    [Fact]
+    public async Task Koud_doorverbinden_naar_extern_nummer_gaat_via_cc_forward()
+    {
+        var (coordinator, ari, _, _) = await ActiveCallAsync();
+
+        Assert.True(await coordinator.ColdTransferAsync("agent1001", "+31201234567"));
+
+        Assert.Contains(ari.Continued, c => c.Channel == "caller-1"
+            && c.Context == "cc-forward" && c.Extension == "+31201234567");
+    }
+
+    [Fact]
+    public async Task Koud_doorverbinden_zonder_actief_gesprek_doet_niets()
+    {
+        var (coordinator, _, agents) = Build(wrapUpSeconds: 0);
+        await agents.LoginAsync("agent1001");
+        Assert.False(await coordinator.ColdTransferAsync("agent1001", "sales"));
     }
 
     [Fact]

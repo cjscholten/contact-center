@@ -1,6 +1,8 @@
 using System.Threading.Channels;
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
+using ContactCenter.Api.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.CallFlow;
 
@@ -14,8 +16,11 @@ public sealed class CallCoordinator : IHostedService
 {
     private const string MohQueueWaiting = "default";
 
+    private const string ForwardContext = "cc-forward";
+
     private readonly IAriClient _ari;
     private readonly AgentStateService _agents;
+    private readonly IDbContextFactory<CcDbContext> _dbFactory;
     private readonly ILogger<CallCoordinator> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -29,10 +34,12 @@ public sealed class CallCoordinator : IHostedService
     private CancellationTokenSource? _pumpCts;
     private Task? _pumpTask;
 
-    public CallCoordinator(IAriClient ari, AgentStateService agents, ILogger<CallCoordinator> logger)
+    public CallCoordinator(IAriClient ari, AgentStateService agents,
+        IDbContextFactory<CcDbContext> dbFactory, ILogger<CallCoordinator> logger)
     {
         _ari = ari;
         _agents = agents;
+        _dbFactory = dbFactory;
         _logger = logger;
         _agents.RequestDispatch = SignalDispatch;
     }
@@ -208,6 +215,63 @@ public sealed class CallCoordinator : IHostedService
         finally
         {
             _gate.Release();
+        }
+    }
+
+    // --- Koud doorverbinden ---------------------------------------------------
+
+    /// <summary>
+    /// Koud doorverbinden: de agent verlaat het gesprek (→ nawerktijd) en de beller wordt
+    /// herrouteerd. Doel = bestaande wachtrijnaam → terug in de wacht + dispatch; anders een
+    /// extern nummer → via het cc-forward-dialplan (vereist een uitgaande SBC-route).
+    /// </summary>
+    public async Task<bool> ColdTransferAsync(string agentName, string target, CancellationToken ct = default)
+    {
+        var toQueue = await IsQueueAsync(target, ct);
+
+        string callerChannelId, callerId, agentChannelId, mixingBridgeId;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == agentName);
+            if (call is null)
+                return false;
+            // ontkoppel zodat het ophangen van de agent-leg de beller niet meeneemt
+            _activeByChannel.Remove(call.CallerChannelId);
+            _activeByChannel.Remove(call.AgentChannelId);
+            (callerChannelId, callerId, agentChannelId, mixingBridgeId) =
+                (call.CallerChannelId, call.CallerId, call.AgentChannelId, call.MixingBridgeId);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        await SafeHangupAsync(agentChannelId, ct); // agent klaar met dit gesprek
+        if (toQueue)
+            await EnqueueCallerAsync(callerChannelId, target, callerId, ct); // verplaatst beller naar holding van doelwachtrij
+        else
+            await _ari.ContinueInDialplanAsync(callerChannelId, ForwardContext, target, 1, ct);
+        await SafeDestroyBridgeAsync(mixingBridgeId, ct); // mixing-brug is nu leeg
+        await _agents.BeginWrapUpAsync(agentName, ct);
+
+        _logger.LogInformation("Koud doorverbonden: beller {Caller} → '{Target}' ({Type}); agent {Agent} naar nawerktijd",
+            callerChannelId, target, toQueue ? "wachtrij" : "extern", agentName);
+        return true;
+    }
+
+    private async Task<bool> IsQueueAsync(string target, CancellationToken ct)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            return await db.Queues.AsNoTracking().AnyAsync(q => q.Name == target, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Kon doeltype voor '{Target}' niet bepalen ({Reden}); behandel als extern nummer",
+                target, ex.Message);
+            return false;
         }
     }
 

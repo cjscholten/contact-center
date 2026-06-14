@@ -33,6 +33,10 @@
     <button id="hold" hidden>In de wacht</button>
     <button id="hangup" disabled>Ophangen</button>
   </p>
+  <p id="transferRow" hidden>
+    <input id="transferTarget" placeholder="wachtrij of nummer" style="width:auto">
+    <button id="transferCold">Koud doorverbinden</button>
+  </p>
 </div>
 
 <audio id="remoteAudio" autoplay></audio>
@@ -125,6 +129,7 @@ $('connect').onclick = async () => {
       $('answer').disabled = true;
       $('hangup').disabled = false;
       showHold(false);
+      $('transferRow').hidden = false;
     },
     onCallHangup: () => {
       setStatus('—');
@@ -132,6 +137,7 @@ $('connect').onclick = async () => {
       $('answer').disabled = true;
       $('hangup').disabled = true;
       $('hold').hidden = true;
+      $('transferRow').hidden = true;
     },
     onServerDisconnect: () => setStatus('verbinding verbroken')
   };
@@ -179,6 +185,22 @@ $('hold').onclick = async () => {
     await api(onHold ? 'unhold' : 'hold');
     showHold(!onHold);
     setStatus(onHold ? 'in de wacht' : 'in gesprek');
+  } catch (e) {
+    setStatus('fout: ' + e.message);
+  }
+};
+
+$('transferCold').onclick = async () => {
+  const target = $('transferTarget').value.trim();
+  if (!target) return;
+  try {
+    const r = await fetch(`${API}/api/agents/${agentName}/transfer/cold`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    // de backend hangt de agent-leg op → onCallHangup reset de UI
   } catch (e) {
     setStatus('fout: ' + e.message);
   }

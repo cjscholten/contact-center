@@ -47,6 +47,7 @@ public sealed class FakeAriClient : IAriClient
     public List<string> DestroyedBridges = [];
     public List<string> Hangups = [];
     public List<string> MohStarted = [];
+    public List<(string Channel, string Context, string Extension)> Continued = [];
 
     private int _bridgeSeq;
     private int _channelSeq;
@@ -55,7 +56,11 @@ public sealed class FakeAriClient : IAriClient
     public Task<string> PlayAsync(string channelId, string media, CancellationToken ct = default)
         => Task.FromResult("playback-1");
     public Task ContinueInDialplanAsync(string channelId, string context, string extension, int priority,
-        CancellationToken ct = default) => Task.CompletedTask;
+        CancellationToken ct = default)
+    {
+        Continued.Add((channelId, context, extension));
+        return Task.CompletedTask;
+    }
 
     public Task HangupAsync(string channelId, CancellationToken ct = default)
     {

@@ -80,6 +80,12 @@ app.MapPost("/api/agents/{name}/hold", async (string name, CallCoordinator calls
 app.MapPost("/api/agents/{name}/unhold", async (string name, CallCoordinator calls, CancellationToken ct)
     => await calls.UnholdAsync(name, ct) ? Results.Ok(new { onHold = false }) : Results.NotFound());
 
+app.MapPost("/api/agents/{name}/transfer/cold",
+    async (string name, TransferRequest req, CallCoordinator calls, CancellationToken ct)
+        => await calls.ColdTransferAsync(name, req.Target, ct) ? Results.Ok() : Results.NotFound());
+
 await DatabaseInitializer.InitializeAsync(app.Services);
 
 app.Run();
+
+internal sealed record TransferRequest(string Target);
