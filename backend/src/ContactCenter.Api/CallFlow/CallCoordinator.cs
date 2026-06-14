@@ -61,8 +61,7 @@ public sealed class CallCoordinator : IHostedService
         await _gate.WaitAsync(ct);
         try
         {
-            var holdingBridge = await GetOrCreateHoldingBridgeAsync(queueName, ct);
-            await _ari.AddToBridgeAsync(holdingBridge, callerChannelId, ct);
+            await PlaceInHoldingAsync(queueName, callerChannelId, ct);
             _waiting.Add(new WaitingCaller(callerChannelId, queueName, callerId));
             _logger.LogInformation("Beller {Channel} in de wacht voor '{Queue}' ({Count} wachtend)",
                 callerChannelId, queueName, _waiting.Count(w => w.QueueName == queueName));
@@ -194,8 +193,7 @@ public sealed class CallCoordinator : IHostedService
 
             if (hold)
             {
-                var holding = await GetOrCreateHoldingBridgeAsync(call.QueueName, ct);
-                await _ari.AddToBridgeAsync(holding, call.CallerChannelId, ct); // verplaatst uit de mixing-brug
+                await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct); // verplaatst uit de mixing-brug
             }
             else
             {
@@ -275,16 +273,22 @@ public sealed class CallCoordinator : IHostedService
 
     // --- Hulpfuncties ---------------------------------------------------------
 
-    private async Task<string> GetOrCreateHoldingBridgeAsync(string queueName, CancellationToken ct)
+    /// <summary>
+    /// Plaatst een kanaal in de holding-brug van de wachtrij en (her)start de wachtmuziek.
+    /// De MoH moet ná de join opnieuw worden gestart: Asterisk stopt de music-on-hold zodra
+    /// de brug leeg raakt (bv. nadat een wachtende beller naar een agent is verbonden).
+    /// </summary>
+    private async Task PlaceInHoldingAsync(string queueName, string channelId, CancellationToken ct)
     {
-        if (_holdingBridges.TryGetValue(queueName, out var existing))
-            return existing;
+        if (!_holdingBridges.TryGetValue(queueName, out var bridgeId))
+        {
+            bridgeId = await _ari.CreateBridgeAsync("holding", ct);
+            _holdingBridges[queueName] = bridgeId;
+            _logger.LogInformation("Holding-brug {Bridge} aangemaakt voor wachtrij '{Queue}'", bridgeId, queueName);
+        }
 
-        var bridgeId = await _ari.CreateBridgeAsync("holding", ct);
+        await _ari.AddToBridgeAsync(bridgeId, channelId, ct);
         await _ari.StartBridgeMohAsync(bridgeId, MohQueueWaiting, ct);
-        _holdingBridges[queueName] = bridgeId;
-        _logger.LogInformation("Holding-brug {Bridge} aangemaakt voor wachtrij '{Queue}'", bridgeId, queueName);
-        return bridgeId;
     }
 
     private PendingConnect? FindPendingByCaller(string callerChannelId)
