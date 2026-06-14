@@ -90,6 +90,59 @@ public class CallCoordinatorTests
         Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
     }
 
+    private static async Task<(CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents, string agentChannel)>
+        ActiveCallAsync(int wrapUpSeconds = 0)
+    {
+        var (coordinator, ari, agents) = Build(wrapUpSeconds);
+        await agents.LoginAsync("agent1001");
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+        await coordinator.TryDispatchAllAsync();
+        var agentChannel = ari.Originates.Single().ChannelId;
+        await coordinator.OnAgentAnsweredAsync(agentChannel);
+        return (coordinator, ari, agents, agentChannel);
+    }
+
+    [Fact]
+    public async Task In_de_wacht_verplaatst_beller_naar_de_holding_brug()
+    {
+        var (coordinator, ari, _, _) = await ActiveCallAsync();
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.HoldAsync("agent1001"));
+
+        var holding = ari.BridgeTypes.First(b => b.Value == "holding").Key;
+        Assert.Contains((holding, "caller-1"), ari.Added);
+    }
+
+    [Fact]
+    public async Task Uit_de_wacht_zet_beller_terug_in_de_mixing_brug()
+    {
+        var (coordinator, ari, _, _) = await ActiveCallAsync();
+        await coordinator.HoldAsync("agent1001");
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.UnholdAsync("agent1001"));
+
+        var mixing = ari.BridgeTypes.First(b => b.Value == "mixing").Key;
+        Assert.Contains((mixing, "caller-1"), ari.Added);
+    }
+
+    [Fact]
+    public async Task Dubbel_in_de_wacht_zetten_doet_niets()
+    {
+        var (coordinator, _, _, _) = await ActiveCallAsync();
+        Assert.True(await coordinator.HoldAsync("agent1001"));
+        Assert.False(await coordinator.HoldAsync("agent1001")); // al in de wacht
+    }
+
+    [Fact]
+    public async Task Hold_zonder_actief_gesprek_doet_niets()
+    {
+        var (coordinator, _, agents) = Build(wrapUpSeconds: 0);
+        await agents.LoginAsync("agent1001");
+        Assert.False(await coordinator.HoldAsync("agent1001"));
+    }
+
     [Fact]
     public async Task Agent_die_niet_opneemt_geeft_de_beller_terug_aan_de_wacht()
     {

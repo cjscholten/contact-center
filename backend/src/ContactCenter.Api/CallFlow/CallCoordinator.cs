@@ -173,6 +173,46 @@ public sealed class CallCoordinator : IHostedService
             SignalDispatch();
     }
 
+    // --- In de wacht ----------------------------------------------------------
+
+    /// <summary>Zet de beller in de wacht: van de mixing-brug naar de holding-brug (wachtmuziek).</summary>
+    public Task<bool> HoldAsync(string agentName, CancellationToken ct = default)
+        => SetHoldAsync(agentName, hold: true, ct);
+
+    /// <summary>Haalt de beller uit de wacht: terug van de holding-brug naar de mixing-brug.</summary>
+    public Task<bool> UnholdAsync(string agentName, CancellationToken ct = default)
+        => SetHoldAsync(agentName, hold: false, ct);
+
+    private async Task<bool> SetHoldAsync(string agentName, bool hold, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == agentName);
+            if (call is null || call.OnHold == hold)
+                return false;
+
+            if (hold)
+            {
+                var holding = await GetOrCreateHoldingBridgeAsync(call.QueueName, ct);
+                await _ari.AddToBridgeAsync(holding, call.CallerChannelId, ct); // verplaatst uit de mixing-brug
+            }
+            else
+            {
+                await _ari.AddToBridgeAsync(call.MixingBridgeId, call.CallerChannelId, ct); // terug uit de holding-brug
+            }
+
+            call.OnHold = hold;
+            _logger.LogInformation("Beller {Caller} {Actie} door agent {Agent}",
+                call.CallerChannelId, hold ? "in de wacht gezet" : "uit de wacht gehaald", agentName);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     // --- Dispatch-pomp --------------------------------------------------------
 
     private void SignalDispatch() => _dispatchSignals.Writer.TryWrite(0);

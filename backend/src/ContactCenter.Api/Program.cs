@@ -74,6 +74,12 @@ app.MapPost("/api/agents/{name}/logout", async (string name, AgentStateService a
 app.MapPost("/api/agents/{name}/wrapup/finish", async (string name, AgentStateService agents, CancellationToken ct)
     => await agents.FinishWrapUpAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
+app.MapPost("/api/agents/{name}/hold", async (string name, CallCoordinator calls, CancellationToken ct)
+    => await calls.HoldAsync(name, ct) ? Results.Ok(new { onHold = true }) : Results.NotFound());
+
+app.MapPost("/api/agents/{name}/unhold", async (string name, CallCoordinator calls, CancellationToken ct)
+    => await calls.UnholdAsync(name, ct) ? Results.Ok(new { onHold = false }) : Results.NotFound());
+
 await DatabaseInitializer.InitializeAsync(app.Services);
 
 app.Run();

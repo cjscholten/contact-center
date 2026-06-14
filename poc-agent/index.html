@@ -30,6 +30,7 @@
   <div>Gesprek: <span id="status">—</span></div>
   <p>
     <button id="answer" disabled>Aannemen</button>
+    <button id="hold" hidden>In de wacht</button>
     <button id="hangup" disabled>Ophangen</button>
   </p>
 </div>
@@ -123,12 +124,14 @@ $('connect').onclick = async () => {
       stopRinging();
       $('answer').disabled = true;
       $('hangup').disabled = false;
+      showHold(false);
     },
     onCallHangup: () => {
       setStatus('—');
       stopRinging();
       $('answer').disabled = true;
       $('hangup').disabled = true;
+      $('hold').hidden = true;
     },
     onServerDisconnect: () => setStatus('verbinding verbroken')
   };
@@ -163,6 +166,22 @@ $('disconnect').onclick = async () => {
 
 $('wrapupFinish').onclick = async () => {
   try { await api('wrapup/finish'); } catch (e) { setStatus('fout: ' + e.message); }
+};
+
+let onHold = false;
+function showHold(held) {
+  onHold = held;
+  $('hold').hidden = false;
+  $('hold').textContent = held ? 'Uit de wacht' : 'In de wacht';
+}
+$('hold').onclick = async () => {
+  try {
+    await api(onHold ? 'unhold' : 'hold');
+    showHold(!onHold);
+    setStatus(onHold ? 'in de wacht' : 'in gesprek');
+  } catch (e) {
+    setStatus('fout: ' + e.message);
+  }
 };
 
 $('answer').onclick = () => simpleUser.answer();
