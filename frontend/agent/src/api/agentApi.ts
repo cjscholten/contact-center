@@ -1,0 +1,32 @@
+import { apiBase } from '../config';
+
+export type AgentStatus = 'LoggedOut' | 'Available' | 'Ringing' | 'OnCall' | 'WrapUp';
+
+export interface AgentSnapshot {
+  name: string;
+  displayName: string;
+  status: AgentStatus;
+  since: string;
+}
+
+async function send(name: string, path: string, body?: unknown): Promise<void> {
+  const response = await fetch(`${apiBase}/api/agents/${encodeURIComponent(name)}/${path}`, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+}
+
+export const agentApi = {
+  async get(name: string): Promise<AgentSnapshot | null> {
+    const response = await fetch(`${apiBase}/api/agents/${encodeURIComponent(name)}`);
+    return response.ok ? (response.json() as Promise<AgentSnapshot>) : null;
+  },
+  login: (name: string) => send(name, 'login'),
+  logout: (name: string) => send(name, 'logout'),
+  finishWrapUp: (name: string) => send(name, 'wrapup/finish'),
+  hold: (name: string) => send(name, 'hold'),
+  unhold: (name: string) => send(name, 'unhold'),
+  coldTransfer: (name: string, target: string) => send(name, 'transfer/cold', { target }),
+};

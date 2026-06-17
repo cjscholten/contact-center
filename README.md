@@ -22,7 +22,8 @@ Beller (PSTN) → Twilio-trunk → AudioCodes SBC → Asterisk
 |---|---|
 | `backend/` | ASP.NET Core backend: ARI-client, wachtrijbeslissingen (EF Core/PostgreSQL) + unit-tests |
 | `infra/` | Docker-opzet voor Asterisk (Ubuntu 24.04, Asterisk 20) en PostgreSQL 17 |
-| `poc-agent/` | Kale browser-agent (statisch HTML + SIP.js) voor de POC |
+| `frontend/agent/` | Agent-app: React + TypeScript + Mantine (Vite), met SIP.js/WebRTC |
+| `poc-agent/` | Oorspronkelijke kale browser-agent (HTML + SIP.js); vervangen door `frontend/agent`, blijft als referentie |
 
 ## POC draaien
 
@@ -81,12 +82,15 @@ Let op: ARI gaat dan met basic auth over onversleuteld http het internet over. V
 
 ### 4. Agent verbinden
 
+De agent-app is een React + TypeScript + Mantine-app (Vite) in `frontend/agent/`:
+
 ```powershell
-cd poc-agent
-npx serve .
+cd frontend/agent
+npm install   # eenmalig
+npm run dev   # Vite dev-server op http://localhost:5173
 ```
 
-Open de pagina via `http://localhost:…` (microfoontoegang vereist localhost of https), vul de Asterisk-host in en klik Verbinden. De POC gebruikt `ws://` op poort 8088; dat werkt alleen vanaf een http-pagina. Voor productie komt hier wss met echte certificaten.
+Open `http://localhost:5173/?host=<publiek-IP-VM>` (microfoontoegang vereist localhost of https), meld je aan en bedien het gesprek. De app gebruikt `ws://` op poort 8088; voor productie komt hier wss met echte certificaten. (`start-poc.cmd` start backend + deze app samen.) De oude `poc-agent/` blijft als kale referentie bestaan.
 
 ### 5. Testgesprek
 

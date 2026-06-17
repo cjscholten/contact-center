@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem Start de POC: backend + agent-pagina in een Windows Terminal-venster
+rem Start de POC: backend + React agent-app (Vite) in een Windows Terminal-venster
 rem met twee panelen (terugval: twee losse cmd-vensters).
 rem Het publieke IP van de Asterisk-VM komt uit het eerste argument,
 rem of anders uit vm-ip.txt naast dit script (bewust gitignored).
@@ -12,16 +12,16 @@ if "%VM_IP%"=="" (
     exit /b 1
 )
 
-echo Backend en agent-pagina starten voor Asterisk op %VM_IP% ...
+echo Backend en agent-app starten voor Asterisk op %VM_IP% ...
 
 where wt >nul 2>nul
 if errorlevel 1 (
     start "CC backend" cmd /k dotnet run --project "%~dp0backend\src\ContactCenter.Api" -- --VmHost=%VM_IP%
-    start "CC agent-pagina" cmd /k npx --yes serve "%~dp0poc-agent" -l 3000
+    start "CC agent-app" cmd /k npm --prefix "%~dp0frontend\agent" run dev -- --port 5173 --strictPort
 ) else (
-    wt --window new new-tab --suppressApplicationTitle --title "CC backend" -d "%~dp0." cmd /k dotnet run --project backend\src\ContactCenter.Api -- --VmHost=%VM_IP% ; split-pane -H --suppressApplicationTitle --title "CC agent-pagina" -d "%~dp0." cmd /k npx --yes serve poc-agent -l 3000
+    wt --window new new-tab --suppressApplicationTitle --title "CC backend" -d "%~dp0." cmd /k dotnet run --project backend\src\ContactCenter.Api -- --VmHost=%VM_IP% ; split-pane -H --suppressApplicationTitle --title "CC agent-app" -d "%~dp0." cmd /k npm --prefix frontend\agent run dev -- --port 5173 --strictPort
 )
 
-ping -n 4 127.0.0.1 >nul
-start http://localhost:3000/?host=%VM_IP%
+ping -n 6 127.0.0.1 >nul
+start http://localhost:5173/?host=%VM_IP%
 endlocal
