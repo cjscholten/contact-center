@@ -1,15 +1,11 @@
 // Asterisk-host (voor de WebRTC-WebSocket) en backend-API-adres.
-// Host komt uit ?host= → localStorage → build-time env, met localhost als laatste val.
+// De host ligt voor nu vast; later wordt dit waarschijnlijk onderdeel van de
+// beheeromgeving. Te overschrijven via ?host= of VITE_ASTERISK_HOST (dev/preview).
 const params = new URLSearchParams(window.location.search);
 
+const ASTERISK_HOST = '4.210.180.67';
+
 export const asteriskHost: string =
-  params.get('host') ??
-  localStorage.getItem('cc-host') ??
-  import.meta.env.VITE_ASTERISK_HOST ??
-  'localhost';
+  params.get('host') ?? import.meta.env.VITE_ASTERISK_HOST ?? ASTERISK_HOST;
 
 export const apiBase: string = import.meta.env.VITE_API_BASE ?? 'http://localhost:5080';
-
-export function rememberHost(host: string): void {
-  localStorage.setItem('cc-host', host);
-}

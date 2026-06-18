@@ -5,7 +5,7 @@ import { useSoftphone } from './softphone/useSoftphone';
 import { useAgentStatus } from './agent/useAgentStatus';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
 import { agentApi } from './api/agentApi';
-import { rememberHost } from './config';
+import { asteriskHost } from './config';
 import { LoginForm } from './components/LoginForm';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
 
@@ -26,11 +26,10 @@ export default function App() {
     if (sp.callState === 'idle') setOnHold(false);
   }, [sp.callState]);
 
-  const login = async (host: string, user: string, password: string) => {
+  const login = async (user: string, password: string) => {
     try {
-      await sp.connect(host, user, password);
+      await sp.connect(asteriskHost, user, password);
       await agentApi.login(user);
-      rememberHost(host);
       setAgentName(user);
     } catch (e) {
       await sp.disconnect();
