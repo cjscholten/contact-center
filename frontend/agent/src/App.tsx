@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Center } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useSoftphone } from './softphone/useSoftphone';
-import { useAgentStatus } from './agent/useAgentStatus';
+import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
-import { agentApi } from './api/agentApi';
+import { agentApi, type Presence } from './api/agentApi';
 import { asteriskHost } from './config';
 import { LoginForm } from './components/LoginForm';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
@@ -18,7 +18,7 @@ export default function App() {
   const sp = useSoftphone(audioRef);
   const [agentName, setAgentName] = useState<string | null>(null);
   const [onHold, setOnHold] = useState(false);
-  const status = useAgentStatus(agentName);
+  const snapshot = useAgentSnapshot(agentName);
   const { waiting } = useContactCenterHub(agentName !== null);
 
   // Wachtstand resetten zodra het gesprek eindigt.
@@ -61,20 +61,42 @@ export default function App() {
     try { await agentApi.finishWrapUp(agentName); } catch (e) { fail('Afronden mislukt', e); }
   };
 
+  const setPresence = async (presence: Presence) => {
+    if (!agentName) return;
+    try { await agentApi.setPresence(agentName, presence); } catch (e) { fail('Status wijzigen mislukt', e); }
+  };
+
+  const pickup = async (callId: string) => {
+    if (!agentName) return;
+    try {
+      await agentApi.pickup(agentName, callId);
+    } catch {
+      notifications.show({
+        color: 'yellow',
+        title: 'Aannemen niet gelukt',
+        message: 'Dit gesprek is al aangenomen of je hebt al een lopend gesprek.',
+      });
+    }
+  };
+
   return (
     <>
       <audio ref={audioRef} autoPlay />
       {agentName ? (
         <ZetaDeskShell
           agentName={agentName}
-          status={status}
+          status={snapshot?.status ?? 'LoggedOut'}
+          presence={snapshot?.presence ?? 'Available'}
           callState={sp.callState}
           onHold={onHold}
           waiting={waiting}
+          canPickup={sp.callState === 'idle'}
           onAnswer={() => void sp.answer()}
           onHangup={() => void sp.hangup()}
           onToggleHold={() => void toggleHold()}
           onFinishWrapUp={() => void finishWrapUp()}
+          onSetPresence={(p) => void setPresence(p)}
+          onPickup={(id) => void pickup(id)}
           onLogout={() => void logout()}
         />
       ) : (

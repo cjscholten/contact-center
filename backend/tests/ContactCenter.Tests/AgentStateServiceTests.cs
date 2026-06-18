@@ -108,4 +108,55 @@ public class AgentStateServiceTests
 
         Assert.Null(await sut.TryReserveForCallAsync(["support"]));
     }
+
+    [Fact]
+    public async Task Agent_op_pauze_is_niet_kiesbaar_voor_automatische_toewijzing()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync("agent1001");
+
+        await sut.SetPresenceAsync("agent1001", Presence.Break);
+
+        Assert.Null(await sut.TryReserveForCallAsync(["support"]));
+    }
+
+    [Fact]
+    public async Task Presence_terug_naar_beschikbaar_maakt_weer_kiesbaar()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync("agent1001");
+        await sut.SetPresenceAsync("agent1001", Presence.Unavailable);
+        await sut.SetPresenceAsync("agent1001", Presence.Available);
+
+        Assert.NotNull(await sut.TryReserveForCallAsync(["support"]));
+    }
+
+    [Fact]
+    public async Task Handmatig_reserveren_kan_ook_terwijl_op_pauze()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync("agent1001");
+        await sut.SetPresenceAsync("agent1001", Presence.Break);
+
+        Assert.NotNull(await sut.TryReserveSpecificAsync("agent1001"));
+    }
+
+    [Fact]
+    public async Task Handmatig_reserveren_kan_niet_tijdens_een_lopend_gesprek()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync("agent1001");
+        await sut.TryReserveSpecificAsync("agent1001"); // → Ringing
+        await sut.ConfirmOnCallAsync("agent1001"); // → OnCall
+
+        Assert.Null(await sut.TryReserveSpecificAsync("agent1001"));
+    }
 }

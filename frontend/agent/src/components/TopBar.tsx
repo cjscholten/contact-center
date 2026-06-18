@@ -1,18 +1,33 @@
-import { Button, Group, Text, Title } from '@mantine/core';
-import { IconLogout, IconPhone, IconPhoneOff, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-react';
-import type { AgentStatus } from '../api/agentApi';
+import { Button, Group, Menu, Text, Title } from '@mantine/core';
+import {
+  IconChevronDown,
+  IconLogout,
+  IconPhone,
+  IconPhoneOff,
+  IconPlayerPause,
+  IconPlayerPlay,
+} from '@tabler/icons-react';
+import type { AgentStatus, Presence } from '../api/agentApi';
 import type { CallState } from '../softphone/useSoftphone';
 import { AgentStatusBadge } from './AgentStatusBadge';
+
+const PRESENCE_LABEL: Record<Presence, string> = {
+  Available: 'Beschikbaar',
+  Break: 'Pauze',
+  Unavailable: 'Niet beschikbaar',
+};
 
 interface Props {
   agentName: string;
   status: AgentStatus;
+  presence: Presence;
   callState: CallState;
   onHold: boolean;
   onAnswer: () => void;
   onHangup: () => void;
   onToggleHold: () => void;
   onFinishWrapUp: () => void;
+  onSetPresence: (presence: Presence) => void;
   onLogout: () => void;
 }
 
@@ -22,7 +37,7 @@ export function TopBar(props: Props) {
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
       <Group gap="sm">
         <Title order={3}>ZetaDesk</Title>
-        <AgentStatusBadge status={props.status} />
+        <AgentStatusBadge status={props.status} presence={props.presence} />
       </Group>
 
       <Group gap="sm" wrap="nowrap">
@@ -53,6 +68,21 @@ export function TopBar(props: Props) {
             Klaar
           </Button>
         )}
+
+        <Menu position="bottom-end" withinPortal>
+          <Menu.Target>
+            <Button variant="subtle" rightSection={<IconChevronDown size={14} />}>
+              {PRESENCE_LABEL[props.presence]}
+            </Button>
+          </Menu.Target>
+          <Menu.Dropdown>
+            <Menu.Label>Status</Menu.Label>
+            <Menu.Item onClick={() => props.onSetPresence('Available')}>Beschikbaar</Menu.Item>
+            <Menu.Item onClick={() => props.onSetPresence('Break')}>Pauze</Menu.Item>
+            <Menu.Item onClick={() => props.onSetPresence('Unavailable')}>Niet beschikbaar</Menu.Item>
+          </Menu.Dropdown>
+        </Menu>
+
         <Text size="sm" c="dimmed">
           {props.agentName}
         </Text>

@@ -284,6 +284,55 @@ public sealed class CallCoordinator : IHostedService
         }
     }
 
+    // --- Handmatig aannemen ---------------------------------------------------
+
+    /// <summary>
+    /// Een agent pakt zelf een specifiek wachtend gesprek. Race-veilig: claimt het gesprek
+    /// alleen als het nog wacht en reserveert déze agent. De agent wordt gebeld (originate);
+    /// bij opnemen volgt de mixing-brug, net als bij automatische toewijzing.
+    /// </summary>
+    public async Task<bool> PickupAsync(string agentName, string callerChannelId, CancellationToken ct = default)
+    {
+        List<WaitingCallView>? snapshot = null;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var idx = _waiting.FindIndex(w => w.ChannelId == callerChannelId);
+            if (idx < 0)
+                return false; // gesprek al aangenomen of opgehangen
+
+            var reserved = await _agents.TryReserveSpecificAsync(agentName, ct);
+            if (reserved is null)
+                return false; // agent heeft al een lopend gesprek
+
+            var caller = _waiting[idx];
+            try
+            {
+                var agentChannelId =
+                    await _ari.OriginateToStasisAsync(reserved.Endpoint, "agent", caller.CallerId, ct: ct);
+                _waiting.RemoveAt(idx);
+                _pending[agentChannelId] = new PendingConnect(reserved.Name, agentChannelId, caller);
+                _logger.LogInformation("Beller {Caller} handmatig aangenomen door agent {Agent}, originate {Channel}",
+                    caller.ChannelId, reserved.Name, agentChannelId);
+                snapshot = BuildWaitingView();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Originate (pickup) naar agent {Agent} mislukt; reservering vrijgeven", reserved.Name);
+                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                return false;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (snapshot is not null)
+            await NotifyQueuesAsync(snapshot, ct);
+        return true;
+    }
+
     // --- Dispatch-pomp --------------------------------------------------------
 
     private void SignalDispatch() => _dispatchSignals.Writer.TryWrite(0);

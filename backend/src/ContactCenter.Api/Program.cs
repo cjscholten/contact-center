@@ -79,6 +79,17 @@ app.MapPost("/api/agents/{name}/logout", async (string name, AgentStateService a
 app.MapPost("/api/agents/{name}/wrapup/finish", async (string name, AgentStateService agents, CancellationToken ct)
     => await agents.FinishWrapUpAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
+app.MapPost("/api/agents/{name}/presence",
+    async (string name, PresenceRequest req, AgentStateService agents, CancellationToken ct)
+        => await agents.SetPresenceAsync(name, req.Presence, ct) is { } snapshot
+            ? Results.Ok(snapshot)
+            : Results.NotFound());
+
+// Handmatig een specifiek wachtend gesprek aannemen. 409 als het al weg is of de agent bezet is.
+app.MapPost("/api/agents/{name}/calls/{callId}/pickup",
+    async (string name, string callId, CallCoordinator calls, CancellationToken ct)
+        => await calls.PickupAsync(name, callId, ct) ? Results.Ok() : Results.Conflict());
+
 app.MapPost("/api/agents/{name}/hold", async (string name, CallCoordinator calls, CancellationToken ct)
     => await calls.HoldAsync(name, ct) ? Results.Ok(new { onHold = true }) : Results.NotFound());
 
@@ -100,3 +111,4 @@ await DatabaseInitializer.InitializeAsync(app.Services);
 app.Run();
 
 internal sealed record TransferRequest(string Target);
+internal sealed record PresenceRequest(Presence Presence);

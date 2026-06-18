@@ -60,6 +60,40 @@ public class CallCoordinatorTests
     }
 
     [Fact]
+    public async Task Pickup_neemt_een_specifiek_wachtend_gesprek_aan()
+    {
+        var (coordinator, ari, agents) = Build(wrapUpSeconds: 0);
+        await agents.LoginAsync("agent1001");
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+
+        Assert.True(await coordinator.PickupAsync("agent1001", "caller-1"));
+
+        var originate = Assert.Single(ari.Originates);
+        Assert.Equal("PJSIP/agent1001", originate.Endpoint);
+    }
+
+    [Fact]
+    public async Task Pickup_van_onbekend_gesprek_faalt()
+    {
+        var (coordinator, _, agents) = Build(wrapUpSeconds: 0);
+        await agents.LoginAsync("agent1001");
+        Assert.False(await coordinator.PickupAsync("agent1001", "bestaat-niet"));
+    }
+
+    [Fact]
+    public async Task Tweede_pickup_van_hetzelfde_gesprek_faalt()
+    {
+        var (coordinator, _, agents) =
+            Build(wrapUpSeconds: 0, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync("agent1001");
+        await agents.LoginAsync("agent1002");
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+
+        Assert.True(await coordinator.PickupAsync("agent1001", "caller-1"));
+        Assert.False(await coordinator.PickupAsync("agent1002", "caller-1")); // al uit de wacht
+    }
+
+    [Fact]
     public async Task Opnemen_zet_beller_en_agent_in_een_mixing_brug()
     {
         var (coordinator, ari, agents) = Build(wrapUpSeconds: 0);

@@ -4,10 +4,10 @@ using Microsoft.EntityFrameworkCore;
 namespace ContactCenter.Api.Agents;
 
 /// <summary>
-/// Statusmachine per agent: LoggedOut → Available → Ringing → OnCall → WrapUp → Available.
-/// Status leeft in-memory (herstart backend = iedereen uitgelogd). De CallCoordinator
-/// bestuurt de gesprekken; deze service kent alleen agent-status en nawerktijd, en meldt
-/// via OnAgentAvailable wanneer er werk verdeeld kan worden.
+/// Statusmachine per agent. Twee assen: de systeem-bepaalde gespreksfase (AgentStatus:
+/// Available → Ringing → OnCall → WrapUp) en de handmatige beschikbaarheid (Presence:
+/// Available/Break/Unavailable). Kiesbaar voor automatische toewijzing = gespreksfase
+/// Available én Presence Available. Status leeft in-memory (herstart = iedereen uitgelogd).
 /// </summary>
 public sealed class AgentStateService(
     IDbContextFactory<CcDbContext> dbFactory,
@@ -15,11 +15,7 @@ public sealed class AgentStateService(
 {
     private const int DefaultWrapUpSeconds = 30;
 
-    /// <summary>
-    /// Niet-blokkerend signaal dat er werk te verdelen valt (een agent werd beschikbaar).
-    /// De CallCoordinator hangt hier een coalescing-trigger aan; bewust geen await, zodat
-    /// dit veilig vanuit elke status-overgang kan worden aangeroepen zonder lock-cykel.
-    /// </summary>
+    /// <summary>Niet-blokkerend signaal dat er werk te verdelen valt (geen await → geen lock-cykel).</summary>
     public Action? RequestDispatch { get; set; }
 
     private sealed class RuntimeState
@@ -29,6 +25,7 @@ public sealed class AgentStateService(
         public required string Endpoint { get; init; }
         public required List<string> QueueNames { get; init; }
         public AgentStatus Status { get; set; } = AgentStatus.Available;
+        public Presence Presence { get; set; } = Presence.Available;
         public DateTimeOffset Since { get; set; } = DateTimeOffset.UtcNow;
         public CancellationTokenSource? WrapUpTimer { get; set; }
     }
@@ -92,7 +89,31 @@ public sealed class AgentStateService(
         }
     }
 
-    /// <summary>Reserveert atomair een beschikbare agent in één van de wachtrijen (status → Ringing).</summary>
+    /// <summary>Handmatige beschikbaarheid zetten. Naar Available maakt de agent (weer) kiesbaar.</summary>
+    public async Task<AgentSnapshot?> SetPresenceAsync(string name, Presence presence, CancellationToken ct = default)
+    {
+        AgentSnapshot? snapshot;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_loggedIn.TryGetValue(name, out var state))
+                return null;
+            state.Presence = presence;
+            state.Since = DateTimeOffset.UtcNow;
+            logger.LogInformation("Agent {Agent} presence → {Presence}", name, presence);
+            snapshot = Snapshot(state);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (presence == Presence.Available)
+            RequestDispatch?.Invoke();
+        return snapshot;
+    }
+
+    /// <summary>Automatische toewijzing: reserveert een kiesbare agent in één van de wachtrijen.</summary>
     public async Task<ReservedAgent?> TryReserveForCallAsync(IReadOnlyCollection<string> queueNames,
         CancellationToken ct = default)
     {
@@ -100,11 +121,32 @@ public sealed class AgentStateService(
         try
         {
             var state = _loggedIn.Values.FirstOrDefault(s =>
-                s.Status == AgentStatus.Available && s.QueueNames.Any(queueNames.Contains));
+                s.Status == AgentStatus.Available
+                && s.Presence == Presence.Available
+                && s.QueueNames.Any(queueNames.Contains));
             if (state is null)
                 return null;
             SetStatus(state, AgentStatus.Ringing);
             return new ReservedAgent(state.Name, state.Endpoint);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Handmatig aannemen: reserveert déze agent als die geen lopend gesprek heeft (presence-onafhankelijk).</summary>
+    public async Task<ReservedAgent?> TryReserveSpecificAsync(string name, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_loggedIn.TryGetValue(name, out var state) && state.Status == AgentStatus.Available)
+            {
+                SetStatus(state, AgentStatus.Ringing);
+                return new ReservedAgent(state.Name, state.Endpoint);
+            }
+            return null;
         }
         finally
         {
@@ -203,7 +245,7 @@ public sealed class AgentStateService(
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var agent = await db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Name == name, ct);
-        return agent is null ? null : new AgentSnapshot(agent.Name, agent.DisplayName, AgentStatus.LoggedOut, default);
+        return agent is null ? null : LoggedOutSnapshot(agent.Name, agent.DisplayName);
     }
 
     public async Task<IReadOnlyList<AgentSnapshot>> GetAllAsync(CancellationToken ct = default)
@@ -216,7 +258,7 @@ public sealed class AgentStateService(
         {
             return [.. agents.Select(a => _loggedIn.TryGetValue(a.Name, out var state)
                 ? Snapshot(state)
-                : new AgentSnapshot(a.Name, a.DisplayName, AgentStatus.LoggedOut, default))];
+                : LoggedOutSnapshot(a.Name, a.DisplayName))];
         }
         finally
         {
@@ -284,7 +326,10 @@ public sealed class AgentStateService(
     }
 
     private static AgentSnapshot Snapshot(RuntimeState state)
-        => new(state.Name, state.DisplayName, state.Status, state.Since);
+        => new(state.Name, state.DisplayName, state.Status, state.Presence, state.Since);
+
+    private static AgentSnapshot LoggedOutSnapshot(string name, string displayName)
+        => new(name, displayName, AgentStatus.LoggedOut, Presence.Available, default);
 }
 
 public sealed record ReservedAgent(string Name, string Endpoint);

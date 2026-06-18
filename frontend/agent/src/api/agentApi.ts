@@ -1,11 +1,13 @@
 import { apiBase } from '../config';
 
 export type AgentStatus = 'LoggedOut' | 'Available' | 'Ringing' | 'OnCall' | 'WrapUp';
+export type Presence = 'Available' | 'Break' | 'Unavailable';
 
 export interface AgentSnapshot {
   name: string;
   displayName: string;
   status: AgentStatus;
+  presence: Presence;
   since: string;
 }
 
@@ -29,4 +31,6 @@ export const agentApi = {
   hold: (name: string) => send(name, 'hold'),
   unhold: (name: string) => send(name, 'unhold'),
   coldTransfer: (name: string, target: string) => send(name, 'transfer/cold', { target }),
+  setPresence: (name: string, presence: Presence) => send(name, 'presence', { presence }),
+  pickup: (name: string, callId: string) => send(name, `calls/${encodeURIComponent(callId)}/pickup`),
 };
