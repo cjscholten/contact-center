@@ -1,8 +1,22 @@
 using ContactCenter.Api.Ari;
+using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
+using ContactCenter.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Tests;
+
+/// <summary>Vangt de wachtrij-pushes op zodat tests ze kunnen inspecteren.</summary>
+public sealed class FakeRealtimeNotifier : IRealtimeNotifier
+{
+    public List<IReadOnlyList<WaitingCallView>> QueuePushes { get; } = [];
+
+    public Task QueuesChangedAsync(IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
+    {
+        QueuePushes.Add(waiting);
+        return Task.CompletedTask;
+    }
+}
 
 /// <summary>In-memory DbContext-factory met seed-helpers voor de tests.</summary>
 public sealed class TestDbContextFactory : IDbContextFactory<CcDbContext>

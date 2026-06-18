@@ -15,7 +15,8 @@ public class CallCoordinatorTests
         factory.Seed(wrapUpSeconds, agents);
         var agentSvc = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
         var ari = new FakeAriClient();
-        var coordinator = new CallCoordinator(ari, agentSvc, factory, NullLogger<CallCoordinator>.Instance);
+        var coordinator = new CallCoordinator(
+            ari, agentSvc, factory, new FakeRealtimeNotifier(), NullLogger<CallCoordinator>.Instance);
         return (coordinator, ari, agentSvc);
     }
 

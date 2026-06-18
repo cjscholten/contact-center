@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.Data;
+using ContactCenter.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.CallFlow;
@@ -21,6 +22,7 @@ public sealed class CallCoordinator : IHostedService
     private readonly IAriClient _ari;
     private readonly AgentStateService _agents;
     private readonly IDbContextFactory<CcDbContext> _dbFactory;
+    private readonly IRealtimeNotifier _notifier;
     private readonly ILogger<CallCoordinator> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -35,16 +37,17 @@ public sealed class CallCoordinator : IHostedService
     private Task? _pumpTask;
 
     public CallCoordinator(IAriClient ari, AgentStateService agents,
-        IDbContextFactory<CcDbContext> dbFactory, ILogger<CallCoordinator> logger)
+        IDbContextFactory<CcDbContext> dbFactory, IRealtimeNotifier notifier, ILogger<CallCoordinator> logger)
     {
         _ari = ari;
         _agents = agents;
         _dbFactory = dbFactory;
+        _notifier = notifier;
         _logger = logger;
         _agents.RequestDispatch = SignalDispatch;
     }
 
-    private sealed record WaitingCaller(string ChannelId, string QueueName, string CallerId);
+    private sealed record WaitingCaller(string ChannelId, string QueueName, string CallerId, DateTimeOffset EnqueuedAt);
 
     private sealed record PendingConnect(string AgentName, string AgentChannelId, WaitingCaller Caller);
 
@@ -65,18 +68,21 @@ public sealed class CallCoordinator : IHostedService
     public async Task EnqueueCallerAsync(string callerChannelId, string queueName, string callerId,
         CancellationToken ct = default)
     {
+        List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
         {
             await PlaceInHoldingAsync(queueName, callerChannelId, ct);
-            _waiting.Add(new WaitingCaller(callerChannelId, queueName, callerId));
+            _waiting.Add(new WaitingCaller(callerChannelId, queueName, callerId, DateTimeOffset.UtcNow));
             _logger.LogInformation("Beller {Channel} in de wacht voor '{Queue}' ({Count} wachtend)",
                 callerChannelId, queueName, _waiting.Count(w => w.QueueName == queueName));
+            snapshot = BuildWaitingView();
         }
         finally
         {
             _gate.Release();
         }
+        await NotifyQueuesAsync(snapshot, ct);
         SignalDispatch();
     }
 
@@ -128,6 +134,7 @@ public sealed class CallCoordinator : IHostedService
         string? wrapUpAgent = null;
         string? releaseAgent = null;
         WaitingCaller? requeue = null;
+        List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
         {
@@ -165,12 +172,14 @@ public sealed class CallCoordinator : IHostedService
                 _waiting.Add(requeue); // beller zit nog in de holding-brug, alleen weer kiesbaar maken
                 _logger.LogInformation("Agent nam niet op; beller {Channel} terug in de wacht", requeue.ChannelId);
             }
+            snapshot = BuildWaitingView();
         }
         finally
         {
             _gate.Release();
         }
 
+        await NotifyQueuesAsync(snapshot, ct);
         if (wrapUpAgent is not null)
             await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
         if (releaseAgent is not null)
@@ -295,6 +304,8 @@ public sealed class CallCoordinator : IHostedService
 
     internal async Task TryDispatchAllAsync(CancellationToken ct = default)
     {
+        var anyDispatched = false;
+        List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
         {
@@ -324,15 +335,20 @@ public sealed class CallCoordinator : IHostedService
                         continue;
                     }
 
+                    anyDispatched = true;
                     progress = true;
                     break; // wachtlijst is gemuteerd; herstart de pass
                 }
             }
+            snapshot = BuildWaitingView();
         }
         finally
         {
             _gate.Release();
         }
+
+        if (anyDispatched)
+            await NotifyQueuesAsync(snapshot, ct);
     }
 
     // --- Hulpfuncties ---------------------------------------------------------
@@ -357,6 +373,24 @@ public sealed class CallCoordinator : IHostedService
 
     private PendingConnect? FindPendingByCaller(string callerChannelId)
         => _pending.Values.FirstOrDefault(p => p.Caller.ChannelId == callerChannelId);
+
+    /// <summary>Huidige wachtende gesprekken (voor de initiële GET; updates lopen via de notifier).</summary>
+    public async Task<IReadOnlyList<WaitingCallView>> GetWaitingViewAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try { return BuildWaitingView(); }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Aanname: aangeroepen terwijl _gate vastgehouden wordt.</summary>
+    private List<WaitingCallView> BuildWaitingView()
+        => [.. _waiting.Select(w => new WaitingCallView(w.ChannelId, w.QueueName, w.CallerId, w.EnqueuedAt))];
+
+    private async Task NotifyQueuesAsync(IReadOnlyList<WaitingCallView> snapshot, CancellationToken ct)
+    {
+        try { await _notifier.QueuesChangedAsync(snapshot, ct); }
+        catch (Exception ex) { _logger.LogWarning("Wachtrij-update pushen mislukt: {Reden}", ex.Message); }
+    }
 
     private async Task SafeHangupAsync(string channelId, CancellationToken ct)
     {

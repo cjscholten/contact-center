@@ -5,6 +5,7 @@ using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
+using ContactCenter.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -39,6 +40,8 @@ if (!string.IsNullOrWhiteSpace(vmHost))
 
 builder.Services.AddDbContextFactory<CcDbContext>(o => o.UseNpgsql(connectionString));
 
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IRealtimeNotifier, SignalRNotifier>();
 builder.Services.AddSingleton<AgentStateService>();
 builder.Services.AddSingleton<CallCoordinator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CallCoordinator>());
@@ -46,8 +49,10 @@ builder.Services.AddSingleton<QueueDecisionService>();
 builder.Services.AddSingleton<InboundCallHandler>();
 builder.Services.AddHostedService<AriEventListener>();
 
-// dev: agent-pagina draait op een andere localhost-poort; aanscherpen met Keycloak
-builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+// dev: front-end draait op een andere localhost-poort; SignalR vereist AllowCredentials,
+// dus reflecteer de origin (niet AllowAnyOrigin). Aanscherpen met Keycloak.
+builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
+    p.SetIsOriginAllowed(_ => true).AllowAnyMethod().AllowAnyHeader().AllowCredentials()));
 
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
@@ -83,6 +88,12 @@ app.MapPost("/api/agents/{name}/unhold", async (string name, CallCoordinator cal
 app.MapPost("/api/agents/{name}/transfer/cold",
     async (string name, TransferRequest req, CallCoordinator calls, CancellationToken ct)
         => await calls.ColdTransferAsync(name, req.Target, ct) ? Results.Ok() : Results.NotFound());
+
+// Wachtrij-overzicht: initiële stand; live updates lopen via de SignalR-hub.
+app.MapGet("/api/queues", async (CallCoordinator calls, CancellationToken ct)
+    => Results.Ok(await calls.GetWaitingViewAsync(ct)));
+
+app.MapHub<ContactCenterHub>("/hub");
 
 await DatabaseInitializer.InitializeAsync(app.Services);
 
