@@ -9,12 +9,24 @@ import {
 } from '@tabler/icons-react';
 import type { AgentStatus, Presence } from '../api/agentApi';
 import type { CallState } from '../softphone/useSoftphone';
-import { AgentStatusBadge } from './AgentStatusBadge';
 
 const PRESENCE_LABEL: Record<Presence, string> = {
   Available: 'Beschikbaar',
   Break: 'Pauze',
   Unavailable: 'Niet beschikbaar',
+};
+
+// Afgeleide statusweergave (label + kleur): een lopende gespreksfase overheerst,
+// anders toont de knop de handmatig gekozen beschikbaarheid.
+const CALL_VIEW: Partial<Record<AgentStatus, { label: string; color: string }>> = {
+  Ringing: { label: 'Wordt gebeld', color: 'yellow' },
+  OnCall: { label: 'In gesprek', color: 'blue' },
+  WrapUp: { label: 'Nawerktijd', color: 'orange' },
+};
+const PRESENCE_VIEW: Record<Presence, { label: string; color: string }> = {
+  Available: { label: 'Beschikbaar', color: 'green' },
+  Break: { label: 'Pauze', color: 'gray' },
+  Unavailable: { label: 'Niet beschikbaar', color: 'red' },
 };
 
 interface Props {
@@ -33,14 +45,14 @@ interface Props {
 
 export function TopBar(props: Props) {
   const inCall = props.callState === 'in_call';
+  const view = CALL_VIEW[props.status] ?? PRESENCE_VIEW[props.presence];
+
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
-      <Group gap="sm">
-        <Title order={3}>ZetaDesk</Title>
-        <AgentStatusBadge status={props.status} presence={props.presence} />
-      </Group>
-
       <Group gap="sm" wrap="nowrap">
+        <Title order={3} mr="xs">
+          ZetaDesk
+        </Title>
         {props.callState === 'ringing' && (
           <Button color="green" leftSection={<IconPhone size={18} />} onClick={props.onAnswer}>
             Aannemen
@@ -68,21 +80,24 @@ export function TopBar(props: Props) {
             Klaar
           </Button>
         )}
+      </Group>
 
+      <Group gap="md" wrap="nowrap">
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
-            <Button variant="subtle" rightSection={<IconChevronDown size={14} />}>
-              {PRESENCE_LABEL[props.presence]}
+            <Button color={view.color} variant="filled" size="md" rightSection={<IconChevronDown size={16} />}>
+              {view.label}
             </Button>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Label>Status</Menu.Label>
-            <Menu.Item onClick={() => props.onSetPresence('Available')}>Beschikbaar</Menu.Item>
-            <Menu.Item onClick={() => props.onSetPresence('Break')}>Pauze</Menu.Item>
-            <Menu.Item onClick={() => props.onSetPresence('Unavailable')}>Niet beschikbaar</Menu.Item>
+            <Menu.Label>Mijn status</Menu.Label>
+            {(Object.keys(PRESENCE_LABEL) as Presence[]).map((p) => (
+              <Menu.Item key={p} onClick={() => props.onSetPresence(p)}>
+                {PRESENCE_LABEL[p]}
+              </Menu.Item>
+            ))}
           </Menu.Dropdown>
         </Menu>
-
         <Text size="sm" c="dimmed">
           {props.agentName}
         </Text>
