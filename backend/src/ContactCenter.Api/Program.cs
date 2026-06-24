@@ -5,6 +5,7 @@ using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
+using ContactCenter.Api.Directory;
 using ContactCenter.Api.Realtime;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -46,6 +47,7 @@ builder.Services.AddSingleton<AgentStateService>();
 builder.Services.AddSingleton<CallCoordinator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CallCoordinator>());
 builder.Services.AddSingleton<QueueDecisionService>();
+builder.Services.AddSingleton<DirectoryService>();
 builder.Services.AddSingleton<InboundCallHandler>();
 builder.Services.AddHostedService<AriEventListener>();
 
@@ -100,6 +102,15 @@ app.MapPost("/api/agents/{name}/transfer/cold",
     async (string name, TransferRequest req, CallCoordinator calls, CancellationToken ct)
         => await calls.ColdTransferAsync(name, req.Target, ct) ? Results.Ok() : Results.NotFound());
 
+app.MapPost("/api/agents/{name}/transfer/agent",
+    async (string name, AgentTransferRequest req, CallCoordinator calls, CancellationToken ct)
+        => await calls.TransferToAgentAsync(name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
+
+// Zoeken naar doorverbind-bestemmingen (collega-agents + contacten).
+app.MapGet("/api/directory/search",
+    async (string? q, string? exclude, DirectoryService directory, CancellationToken ct)
+        => Results.Ok(await directory.SearchAsync(q, exclude, ct)));
+
 // Wachtrij-overzicht: initiële stand; live updates lopen via de SignalR-hub.
 app.MapGet("/api/queues", async (CallCoordinator calls, CancellationToken ct)
     => Results.Ok(await calls.GetWaitingViewAsync(ct)));
@@ -111,4 +122,5 @@ await DatabaseInitializer.InitializeAsync(app.Services);
 app.Run();
 
 internal sealed record TransferRequest(string Target);
+internal sealed record AgentTransferRequest(string Agent);
 internal sealed record PresenceRequest(Presence Presence);

@@ -8,6 +8,7 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
     public DbSet<InboundNumber> InboundNumbers => Set<InboundNumber>();
     public DbSet<Agent> Agents => Set<Agent>();
     public DbSet<GlobalSettings> Settings => Set<GlobalSettings>();
+    public DbSet<Contact> Contacts => Set<Contact>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +48,14 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
             e.HasKey(qa => new { qa.AgentId, qa.QueueConfigId });
             e.HasOne(qa => qa.Queue).WithMany().HasForeignKey(qa => qa.QueueConfigId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Contact>(e =>
+        {
+            e.Property(c => c.Name).HasMaxLength(100);
+            e.HasIndex(c => c.Name);
+            e.Property(c => c.Number).HasMaxLength(20);
+            e.Property(c => c.Department).HasMaxLength(100);
         });
     }
 }

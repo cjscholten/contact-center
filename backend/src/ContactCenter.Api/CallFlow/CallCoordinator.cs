@@ -269,6 +269,63 @@ public sealed class CallCoordinator : IHostedService
         return true;
     }
 
+    /// <summary>
+    /// Koud doorverbinden naar een specifieke collega-agent: de huidige agent stapt eruit
+    /// (→ nawerktijd), de beller wacht in de holding-brug en de doel-agent wordt gebeld; bij
+    /// opnemen volgt de mixing-brug. Faalt als de doel-agent offline/bezet is.
+    /// </summary>
+    public async Task<bool> TransferToAgentAsync(string fromAgent, string toAgentName, CancellationToken ct = default)
+    {
+        List<WaitingCallView>? requeueSnapshot = null;
+        string? wrapUpAgent = null;
+        var ok = false;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == fromAgent);
+            if (call is null)
+                return false;
+            var reserved = await _agents.TryReserveSpecificAsync(toAgentName, ct);
+            if (reserved is null)
+                return false; // doel-agent offline of al in gesprek
+
+            _activeByChannel.Remove(call.CallerChannelId);
+            _activeByChannel.Remove(call.AgentChannelId);
+
+            await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct); // beller wacht (wachtmuziek)
+            await SafeHangupAsync(call.AgentChannelId, ct);
+            await SafeDestroyBridgeAsync(call.MixingBridgeId, ct);
+            wrapUpAgent = call.AgentName;
+
+            var waiting = new WaitingCaller(call.CallerChannelId, call.QueueName, call.CallerId, DateTimeOffset.UtcNow);
+            try
+            {
+                var toChannel = await _ari.OriginateToStasisAsync(reserved.Endpoint, "agent", call.CallerId, ct: ct);
+                _pending[toChannel] = new PendingConnect(reserved.Name, toChannel, waiting);
+                _logger.LogInformation("Beller {Caller} doorverbonden van {From} naar agent {To}",
+                    call.CallerChannelId, fromAgent, reserved.Name);
+                ok = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Originate naar doel-agent {Agent} mislukt; beller terug in de wacht", reserved.Name);
+                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                _waiting.Add(waiting);
+                requeueSnapshot = BuildWaitingView();
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (wrapUpAgent is not null)
+            await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
+        if (requeueSnapshot is not null)
+            await NotifyQueuesAsync(requeueSnapshot, ct);
+        return ok;
+    }
+
     private async Task<bool> IsQueueAsync(string target, CancellationToken ct)
     {
         try

@@ -128,6 +128,34 @@ public class CallCoordinatorTests
         Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
     }
 
+    [Fact]
+    public async Task Doorverbinden_naar_collega_belt_die_agent_en_zet_huidige_in_nawerktijd()
+    {
+        var (coordinator, ari, agents) =
+            Build(wrapUpSeconds: 30, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync("agent1001");
+        await agents.LoginAsync("agent1002");
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+        await coordinator.PickupAsync("agent1001", "caller-1");
+        var firstAgentChannel = ari.Originates.Single().ChannelId;
+        await coordinator.OnAgentAnsweredAsync(firstAgentChannel);
+        ari.Originates.Clear();
+
+        Assert.True(await coordinator.TransferToAgentAsync("agent1001", "agent1002"));
+
+        var originate = Assert.Single(ari.Originates);
+        Assert.Equal("PJSIP/agent1002", originate.Endpoint);
+        Assert.Contains(firstAgentChannel, ari.Hangups);
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
+    }
+
+    [Fact]
+    public async Task Doorverbinden_naar_niet_ingelogde_agent_faalt()
+    {
+        var (coordinator, _, _, _) = await ActiveCallAsync();
+        Assert.False(await coordinator.TransferToAgentAsync("agent1001", "agent1002"));
+    }
+
     private static async Task<(CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents, string agentChannel)>
         ActiveCallAsync(int wrapUpSeconds = 0)
     {

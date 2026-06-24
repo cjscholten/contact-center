@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Center } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useSoftphone } from './softphone/useSoftphone';
 import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
-import { agentApi, type Presence } from './api/agentApi';
+import { agentApi, type DirectoryEntry, type Presence } from './api/agentApi';
 import { asteriskHost } from './config';
 import { LoginForm } from './components/LoginForm';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
@@ -79,6 +79,25 @@ export default function App() {
     }
   };
 
+  const search = useCallback(
+    (query: string) => agentApi.searchDirectory(query, agentName ?? undefined),
+    [agentName],
+  );
+
+  const transfer = async (entry: DirectoryEntry) => {
+    if (!agentName) return;
+    try {
+      if (entry.kind === 'agent') await agentApi.transferToAgent(agentName, entry.target);
+      else await agentApi.coldTransfer(agentName, entry.target);
+    } catch {
+      notifications.show({
+        color: 'yellow',
+        title: 'Doorverbinden niet gelukt',
+        message: entry.kind === 'agent' ? 'De collega is offline of in gesprek.' : 'Doorverbinden mislukt.',
+      });
+    }
+  };
+
   return (
     <>
       <audio ref={audioRef} autoPlay />
@@ -97,6 +116,8 @@ export default function App() {
           onFinishWrapUp={() => void finishWrapUp()}
           onSetPresence={(p) => void setPresence(p)}
           onPickup={(id) => void pickup(id)}
+          onSearch={search}
+          onTransfer={(e) => void transfer(e)}
           onLogout={() => void logout()}
         />
       ) : (

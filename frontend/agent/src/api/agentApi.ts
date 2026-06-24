@@ -11,6 +11,13 @@ export interface AgentSnapshot {
   since: string;
 }
 
+export interface DirectoryEntry {
+  kind: 'agent' | 'contact';
+  label: string;
+  detail: string;
+  target: string;
+}
+
 async function send(name: string, path: string, body?: unknown): Promise<void> {
   const response = await fetch(`${apiBase}/api/agents/${encodeURIComponent(name)}/${path}`, {
     method: 'POST',
@@ -33,4 +40,12 @@ export const agentApi = {
   coldTransfer: (name: string, target: string) => send(name, 'transfer/cold', { target }),
   setPresence: (name: string, presence: Presence) => send(name, 'presence', { presence }),
   pickup: (name: string, callId: string) => send(name, `calls/${encodeURIComponent(callId)}/pickup`),
+  transferToAgent: (name: string, agent: string) => send(name, 'transfer/agent', { agent }),
+  async searchDirectory(query: string, exclude?: string): Promise<DirectoryEntry[]> {
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (exclude) params.set('exclude', exclude);
+    const response = await fetch(`${apiBase}/api/directory/search?${params.toString()}`);
+    return response.ok ? (response.json() as Promise<DirectoryEntry[]>) : [];
+  },
 };

@@ -88,5 +88,15 @@ public static class DatabaseInitializer
             await db.SaveChangesAsync();
             logger.LogInformation("Globale instellingen geseed (nawerktijd: 30s)");
         }
+
+        if (!await db.Contacts.AnyAsync())
+        {
+            db.Contacts.AddRange(
+                new Contact { Name = "Receptie", Number = "+31201234500", Department = "Kantoor" },
+                new Contact { Name = "Helpdesk tweede lijn", Number = "+31201234510", Department = "Support" },
+                new Contact { Name = "Boekhouding", Number = "+31201234520", Department = "Finance" });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Voorbeeldcontacten geseed");
+        }
     }
 }
