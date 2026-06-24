@@ -3,7 +3,7 @@
 // beheeromgeving. Te overschrijven via ?host= of VITE_ASTERISK_HOST (dev/preview).
 const params = new URLSearchParams(window.location.search);
 
-const ASTERISK_HOST = '4.210.180.67';
+const ASTERISK_HOST = '20.107.0.204';
 
 export const asteriskHost: string =
   params.get('host') ?? import.meta.env.VITE_ASTERISK_HOST ?? ASTERISK_HOST;
