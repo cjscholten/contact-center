@@ -106,6 +106,19 @@ app.MapPost("/api/agents/{name}/transfer/agent",
     async (string name, AgentTransferRequest req, CallCoordinator calls, CancellationToken ct)
         => await calls.TransferToAgentAsync(name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
 
+// Warm doorverbinden (overleg): starten met een collega, daarna voltooien of annuleren.
+app.MapPost("/api/agents/{name}/transfer/warm",
+    async (string name, AgentTransferRequest req, CallCoordinator calls, CancellationToken ct)
+        => await calls.StartWarmTransferAsync(name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
+
+app.MapPost("/api/agents/{name}/transfer/warm/complete",
+    async (string name, CallCoordinator calls, CancellationToken ct)
+        => await calls.CompleteWarmTransferAsync(name, ct) ? Results.Ok() : Results.Conflict());
+
+app.MapPost("/api/agents/{name}/transfer/warm/cancel",
+    async (string name, CallCoordinator calls, CancellationToken ct)
+        => await calls.CancelWarmTransferAsync(name, ct) ? Results.Ok() : Results.Conflict());
+
 // Zoeken naar doorverbind-bestemmingen (collega-agents + contacten).
 app.MapGet("/api/directory/search",
     async (string? q, string? exclude, DirectoryService directory, CancellationToken ct)

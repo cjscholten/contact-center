@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Badge, Button, Card, Group, Stack, Text, TextInput, Title } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
-import { IconArrowForwardUp, IconSearch } from '@tabler/icons-react';
+import { IconArrowForwardUp, IconSearch, IconUsers } from '@tabler/icons-react';
 import type { DirectoryEntry } from '../api/agentApi';
 
 interface Props {
   canTransfer: boolean;
+  consulting: boolean;
   onSearch: (query: string) => Promise<DirectoryEntry[]>;
   onTransfer: (entry: DirectoryEntry) => void;
+  onWarmTransfer: (entry: DirectoryEntry) => void;
 }
 
-export function TransferSearchPanel({ canTransfer, onSearch, onTransfer }: Props) {
+export function TransferSearchPanel({ canTransfer, consulting, onSearch, onTransfer, onWarmTransfer }: Props) {
   const [query, setQuery] = useState('');
   const [debounced] = useDebouncedValue(query, 300);
   const [results, setResults] = useState<DirectoryEntry[]>([]);
@@ -39,10 +41,16 @@ export function TransferSearchPanel({ canTransfer, onSearch, onTransfer }: Props
           value={query}
           onChange={(e) => setQuery(e.currentTarget.value)}
         />
-        {!canTransfer && (
+        {consulting ? (
           <Text c="dimmed" size="sm">
-            Doorverbinden kan alleen tijdens een gesprek.
+            Er loopt een overleg — voltooi of annuleer het bovenin.
           </Text>
+        ) : (
+          !canTransfer && (
+            <Text c="dimmed" size="sm">
+              Doorverbinden kan alleen tijdens een gesprek.
+            </Text>
+          )
         )}
         {results.length === 0 && (
           <Text c="dimmed" size="sm">
@@ -73,15 +81,29 @@ export function TransferSearchPanel({ canTransfer, onSearch, onTransfer }: Props
                 )}
               </div>
             </Group>
-            <Button
-              size="compact-sm"
-              variant="light"
-              leftSection={<IconArrowForwardUp size={16} />}
-              disabled={!canTransfer}
-              onClick={() => onTransfer(entry)}
-            >
-              Doorverbinden
-            </Button>
+            <Group gap="xs" wrap="nowrap">
+              {entry.kind === 'agent' && (
+                <Button
+                  size="compact-sm"
+                  variant="light"
+                  color="teal"
+                  leftSection={<IconUsers size={16} />}
+                  disabled={!canTransfer || consulting}
+                  onClick={() => onWarmTransfer(entry)}
+                >
+                  Overleg
+                </Button>
+              )}
+              <Button
+                size="compact-sm"
+                variant="light"
+                leftSection={<IconArrowForwardUp size={16} />}
+                disabled={!canTransfer || consulting}
+                onClick={() => onTransfer(entry)}
+              >
+                Doorverbinden
+              </Button>
+            </Group>
           </Group>
         ))}
       </Stack>

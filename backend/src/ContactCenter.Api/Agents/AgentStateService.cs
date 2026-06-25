@@ -173,6 +173,25 @@ public sealed class AgentStateService(
         RequestDispatch?.Invoke();
     }
 
+    /// <summary>Overleg afgebroken: zet de geraadpleegde agent meteen terug op beschikbaar, of die
+    /// nu nog gebeld werd (Ringing) of het overleg al had aangenomen (OnCall). Geen nawerktijd —
+    /// er was geen echt klantgesprek.</summary>
+    public async Task ResetToAvailableAsync(string name, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_loggedIn.TryGetValue(name, out var state)
+                && state.Status is AgentStatus.Ringing or AgentStatus.OnCall)
+                SetStatus(state, AgentStatus.Available);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+        RequestDispatch?.Invoke();
+    }
+
     /// <summary>Gesprek beëindigd: start nawerktijd (of meteen beschikbaar als die 0 is).</summary>
     public async Task BeginWrapUpAsync(string name, CancellationToken ct = default)
     {

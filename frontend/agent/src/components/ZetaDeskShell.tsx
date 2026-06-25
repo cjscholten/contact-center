@@ -12,6 +12,7 @@ interface Props {
   presence: Presence;
   callState: CallState;
   onHold: boolean;
+  consultWith: string | null;
   waiting: WaitingCall[];
   canPickup: boolean;
   onAnswer: () => void;
@@ -22,6 +23,9 @@ interface Props {
   onPickup: (callId: string) => void;
   onSearch: (query: string) => Promise<DirectoryEntry[]>;
   onTransfer: (entry: DirectoryEntry) => void;
+  onWarmTransfer: (entry: DirectoryEntry) => void;
+  onCompleteWarmTransfer: () => void;
+  onCancelWarmTransfer: () => void;
   onLogout: () => void;
 }
 
@@ -35,11 +39,14 @@ export function ZetaDeskShell(props: Props) {
           presence={props.presence}
           callState={props.callState}
           onHold={props.onHold}
+          consultWith={props.consultWith}
           onAnswer={props.onAnswer}
           onHangup={props.onHangup}
           onToggleHold={props.onToggleHold}
           onFinishWrapUp={props.onFinishWrapUp}
           onSetPresence={props.onSetPresence}
+          onCompleteWarmTransfer={props.onCompleteWarmTransfer}
+          onCancelWarmTransfer={props.onCancelWarmTransfer}
           onLogout={props.onLogout}
         />
       </AppShell.Header>
@@ -49,8 +56,10 @@ export function ZetaDeskShell(props: Props) {
             <QueuePanel waiting={props.waiting} canPickup={props.canPickup} onPickup={props.onPickup} />
             <TransferSearchPanel
               canTransfer={props.callState === 'in_call'}
+              consulting={props.consultWith !== null}
               onSearch={props.onSearch}
               onTransfer={props.onTransfer}
+              onWarmTransfer={props.onWarmTransfer}
             />
           </Stack>
         </Container>

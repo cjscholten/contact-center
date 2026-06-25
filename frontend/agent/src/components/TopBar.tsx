@@ -1,11 +1,13 @@
 import { Button, Group, Menu, Text, Title } from '@mantine/core';
 import {
+  IconCheck,
   IconChevronDown,
   IconLogout,
   IconPhone,
   IconPhoneOff,
   IconPlayerPause,
   IconPlayerPlay,
+  IconX,
 } from '@tabler/icons-react';
 import type { AgentStatus, Presence } from '../api/agentApi';
 import type { CallState } from '../softphone/useSoftphone';
@@ -35,16 +37,20 @@ interface Props {
   presence: Presence;
   callState: CallState;
   onHold: boolean;
+  consultWith: string | null;
   onAnswer: () => void;
   onHangup: () => void;
   onToggleHold: () => void;
   onFinishWrapUp: () => void;
   onSetPresence: (presence: Presence) => void;
+  onCompleteWarmTransfer: () => void;
+  onCancelWarmTransfer: () => void;
   onLogout: () => void;
 }
 
 export function TopBar(props: Props) {
   const inCall = props.callState === 'in_call';
+  const consulting = props.consultWith !== null;
   const view = CALL_VIEW[props.status] ?? PRESENCE_VIEW[props.presence];
 
   return (
@@ -70,11 +76,29 @@ export function TopBar(props: Props) {
         <Button
           variant="default"
           leftSection={props.onHold ? <IconPlayerPlay size={18} /> : <IconPlayerPause size={18} />}
-          disabled={!inCall}
+          disabled={!inCall || consulting}
           onClick={props.onToggleHold}
         >
           {props.onHold ? 'Uit de wacht' : 'In de wacht'}
         </Button>
+        {consulting && (
+          <>
+            <Text size="sm" c="dimmed" ml="xs">
+              Overleg met {props.consultWith}
+            </Text>
+            <Button color="teal" leftSection={<IconCheck size={18} />} onClick={props.onCompleteWarmTransfer}>
+              Overleg voltooien
+            </Button>
+            <Button
+              variant="light"
+              color="gray"
+              leftSection={<IconX size={18} />}
+              onClick={props.onCancelWarmTransfer}
+            >
+              Annuleren
+            </Button>
+          </>
+        )}
         {props.status === 'WrapUp' && (
           <Button color="orange" onClick={props.onFinishWrapUp}>
             Klaar

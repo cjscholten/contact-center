@@ -18,12 +18,16 @@ export default function App() {
   const sp = useSoftphone(audioRef);
   const [agentName, setAgentName] = useState<string | null>(null);
   const [onHold, setOnHold] = useState(false);
+  const [consultWith, setConsultWith] = useState<string | null>(null);
   const snapshot = useAgentSnapshot(agentName);
   const { waiting } = useContactCenterHub(agentName !== null);
 
-  // Wachtstand resetten zodra het gesprek eindigt.
+  // Wachtstand en overleg resetten zodra het gesprek eindigt (o.a. na voltooien van een overleg).
   useEffect(() => {
-    if (sp.callState === 'idle') setOnHold(false);
+    if (sp.callState === 'idle') {
+      setOnHold(false);
+      setConsultWith(null);
+    }
   }, [sp.callState]);
 
   const login = async (user: string, password: string) => {
@@ -98,6 +102,41 @@ export default function App() {
     }
   };
 
+  // Warm doorverbinden: overleg starten met een collega; daarna voltooien of annuleren.
+  const startWarmTransfer = async (entry: DirectoryEntry) => {
+    if (!agentName) return;
+    try {
+      await agentApi.warmTransfer(agentName, entry.target);
+      setConsultWith(entry.label);
+    } catch {
+      notifications.show({
+        color: 'yellow',
+        title: 'Overleg starten niet gelukt',
+        message: 'De collega is offline of al in gesprek.',
+      });
+    }
+  };
+
+  const completeWarmTransfer = async () => {
+    if (!agentName) return;
+    try {
+      await agentApi.completeWarmTransfer(agentName);
+      setConsultWith(null);
+    } catch {
+      notifications.show({
+        color: 'yellow',
+        title: 'Overleg voltooien niet gelukt',
+        message: 'De collega heeft het overleg nog niet aangenomen.',
+      });
+    }
+  };
+
+  const cancelWarmTransfer = async () => {
+    if (!agentName) return;
+    try { await agentApi.cancelWarmTransfer(agentName); } catch { /* overleg al beëindigd */ }
+    setConsultWith(null);
+  };
+
   return (
     <>
       <audio ref={audioRef} autoPlay />
@@ -108,6 +147,7 @@ export default function App() {
           presence={snapshot?.presence ?? 'Available'}
           callState={sp.callState}
           onHold={onHold}
+          consultWith={consultWith}
           waiting={waiting}
           canPickup={sp.callState === 'idle'}
           onAnswer={() => void sp.answer()}
@@ -118,6 +158,9 @@ export default function App() {
           onPickup={(id) => void pickup(id)}
           onSearch={search}
           onTransfer={(e) => void transfer(e)}
+          onWarmTransfer={(e) => void startWarmTransfer(e)}
+          onCompleteWarmTransfer={() => void completeWarmTransfer()}
+          onCancelWarmTransfer={() => void cancelWarmTransfer()}
           onLogout={() => void logout()}
         />
       ) : (

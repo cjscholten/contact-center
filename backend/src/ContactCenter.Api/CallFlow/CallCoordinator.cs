@@ -19,6 +19,11 @@ public sealed class CallCoordinator : IHostedService
 
     private const string ForwardContext = "cc-forward";
 
+    // App-arg waarmee een door de backend gebelde leg zichzelf identificeert bij StasisStart:
+    // "agent" = leg die met de beller verbonden wordt, "consult" = overlegleg (warm doorverbinden).
+    private const string AgentAppArg = "agent";
+    private const string ConsultAppArg = "consult";
+
     private readonly IAriClient _ari;
     private readonly AgentStateService _agents;
     private readonly IDbContextFactory<CcDbContext> _dbFactory;
@@ -30,6 +35,7 @@ public sealed class CallCoordinator : IHostedService
     private readonly List<WaitingCaller> _waiting = [];
     private readonly Dictionary<string, PendingConnect> _pending = new(StringComparer.Ordinal); // agentChannelId → pending
     private readonly Dictionary<string, ActiveCall> _activeByChannel = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WarmTransfer> _warmByAgent = new(StringComparer.OrdinalIgnoreCase); // doorverbindende agent → overleg
 
     private readonly Channel<byte> _dispatchSignals =
         Channel.CreateBounded<byte>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
@@ -60,6 +66,25 @@ public sealed class CallCoordinator : IHostedService
         public required string CallerId { get; init; }
         public required string MixingBridgeId { get; init; }
         public bool OnHold { get; set; }
+    }
+
+    /// <summary>
+    /// Een lopend warm doorverbinden (overleg). De beller staat in de holding-brug (wachtmuziek);
+    /// de doorverbindende agent (From) blijft in de mixing-brug, die nu als overlegbrug dient. Zodra
+    /// de geraadpleegde collega (Consult) opneemt komt die in dezelfde brug → From en Consult overleggen.
+    /// Voltooien zet de beller bij Consult; annuleren haalt de beller terug bij From.
+    /// </summary>
+    private sealed class WarmTransfer
+    {
+        public required string FromAgentName { get; init; }
+        public required string FromAgentChannelId { get; init; }
+        public required string ConsultAgentName { get; init; }
+        public required string ConsultChannelId { get; init; }
+        public required string BridgeId { get; init; } // hergebruikte mixing-brug, nu overlegbrug
+        public required string CallerChannelId { get; init; }
+        public required string CallerId { get; init; }
+        public required string QueueName { get; init; }
+        public bool Connected { get; set; } // collega heeft het overleg aangenomen
     }
 
     // --- Inkomende beller -----------------------------------------------------
@@ -133,13 +158,20 @@ public sealed class CallCoordinator : IHostedService
     {
         string? wrapUpAgent = null;
         string? releaseAgent = null;
+        string? resetAgent = null;
         WaitingCaller? requeue = null;
+        var signalDispatch = false;
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
         {
+            // 0) lopend overleg (warm doorverbinden): beller, agent of collega valt weg
+            if (FindWarmTransfer(channelId) is { } warm)
+            {
+                (wrapUpAgent, resetAgent, signalDispatch) = await HandleWarmChannelGoneAsync(warm, channelId, ct);
+            }
             // 1) actief gesprek: ruim de brug op, hang de andere leg op, agent → nawerktijd
-            if (_activeByChannel.TryGetValue(channelId, out var call))
+            else if (_activeByChannel.TryGetValue(channelId, out var call))
             {
                 _activeByChannel.Remove(call.CallerChannelId);
                 _activeByChannel.Remove(call.AgentChannelId);
@@ -184,7 +216,9 @@ public sealed class CallCoordinator : IHostedService
             await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
         if (releaseAgent is not null)
             await _agents.ReleaseReservationAsync(releaseAgent, ct);
-        if (requeue is not null)
+        if (resetAgent is not null)
+            await _agents.ResetToAvailableAsync(resetAgent, ct);
+        if (requeue is not null || signalDispatch)
             SignalDispatch();
     }
 
@@ -339,6 +373,231 @@ public sealed class CallCoordinator : IHostedService
                 target, ex.Message);
             return false;
         }
+    }
+
+    // --- Warm doorverbinden (overleg) -----------------------------------------
+
+    /// <summary>
+    /// Start een overleg met een collega: de beller gaat in de wacht (holding-brug + wachtmuziek),
+    /// de huidige agent blijft achter in de mixing-brug (die nu als overlegbrug dient) en de collega
+    /// wordt gebeld. Bij opnemen komt de collega in dezelfde brug. Faalt als er geen lopend gesprek
+    /// is, er al een overleg loopt, of de collega offline/bezet is.
+    /// </summary>
+    public async Task<bool> StartWarmTransferAsync(string fromAgent, string toAgentName, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == fromAgent);
+            if (call is null || _warmByAgent.ContainsKey(fromAgent))
+                return false;
+            var reserved = await _agents.TryReserveSpecificAsync(toAgentName, ct);
+            if (reserved is null)
+                return false; // collega offline of al in gesprek
+
+            // beller parkeren; de agent blijft achter in de mixing-brug (wordt overlegbrug)
+            _activeByChannel.Remove(call.CallerChannelId);
+            _activeByChannel.Remove(call.AgentChannelId);
+            await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct);
+
+            try
+            {
+                var consultChannel =
+                    await _ari.OriginateToStasisAsync(reserved.Endpoint, ConsultAppArg, call.CallerId, ct: ct);
+                _warmByAgent[fromAgent] = new WarmTransfer
+                {
+                    FromAgentName = fromAgent,
+                    FromAgentChannelId = call.AgentChannelId,
+                    ConsultAgentName = reserved.Name,
+                    ConsultChannelId = consultChannel,
+                    BridgeId = call.MixingBridgeId,
+                    CallerChannelId = call.CallerChannelId,
+                    CallerId = call.CallerId,
+                    QueueName = call.QueueName,
+                };
+                _logger.LogInformation("Overleg gestart: agent {From} raadpleegt {To} over beller {Caller}",
+                    fromAgent, reserved.Name, call.CallerChannelId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // originate mislukt: beller terug bij de agent, collega vrijgeven
+                _logger.LogError(ex, "Originate naar collega {Agent} mislukt; overleg afgebroken", reserved.Name);
+                await _ari.AddToBridgeAsync(call.MixingBridgeId, call.CallerChannelId, ct);
+                call.OnHold = false;
+                _activeByChannel[call.CallerChannelId] = call;
+                _activeByChannel[call.AgentChannelId] = call;
+                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                return false;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>De geraadpleegde collega nam het overleg aan: voeg die toe aan de overlegbrug.</summary>
+    public async Task OnConsultAnsweredAsync(string consultChannelId, CancellationToken ct = default)
+    {
+        string? confirmAgent = null;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var wt = _warmByAgent.Values.FirstOrDefault(w => w.ConsultChannelId == consultChannelId);
+            if (wt is null)
+            {
+                _logger.LogWarning("Overlegleg {Channel} nam op maar er is geen lopend overleg", consultChannelId);
+                await SafeHangupAsync(consultChannelId, ct);
+                return;
+            }
+            await _ari.AddToBridgeAsync(wt.BridgeId, consultChannelId, ct);
+            wt.Connected = true;
+            confirmAgent = wt.ConsultAgentName;
+            _logger.LogInformation("Collega {Agent} neemt deel aan overleg (brug {Bridge})",
+                wt.ConsultAgentName, wt.BridgeId);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (confirmAgent is not null)
+            await _agents.ConfirmOnCallAsync(confirmAgent, ct);
+    }
+
+    /// <summary>
+    /// Voltooi het overleg: de doorverbindende agent stapt eruit (→ nawerktijd) en de beller komt
+    /// bij de collega in de brug. Kan pas zodra de collega het overleg heeft aangenomen.
+    /// </summary>
+    public async Task<bool> CompleteWarmTransferAsync(string fromAgent, CancellationToken ct = default)
+    {
+        string? wrapUpAgent = null;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_warmByAgent.TryGetValue(fromAgent, out var wt) || !wt.Connected)
+                return false;
+            _warmByAgent.Remove(fromAgent);
+
+            await SafeHangupAsync(wt.FromAgentChannelId, ct);                 // agent-leg eruit
+            await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct); // beller uit holding → bij collega
+            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.ConsultAgentName,
+                wt.QueueName, wt.CallerId, wt.BridgeId);
+            wrapUpAgent = wt.FromAgentName;
+            _logger.LogInformation("Overleg voltooid: beller {Caller} nu bij collega {Agent}; {From} naar nawerktijd",
+                wt.CallerChannelId, wt.ConsultAgentName, wt.FromAgentName);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (wrapUpAgent is not null)
+            await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Annuleer het overleg: de collega-leg eindigt en de beller gaat terug naar de oorspronkelijke
+    /// agent. Werkt ook wanneer de collega nog niet had opgenomen.
+    /// </summary>
+    public async Task<bool> CancelWarmTransferAsync(string fromAgent, CancellationToken ct = default)
+    {
+        string? resetAgent = null;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_warmByAgent.Remove(fromAgent, out var wt))
+                return false;
+
+            await SafeHangupAsync(wt.ConsultChannelId, ct);                  // collega-leg eruit
+            await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct); // beller terug bij agent
+            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.FromAgentName,
+                wt.QueueName, wt.CallerId, wt.BridgeId);
+            resetAgent = wt.ConsultAgentName;
+            _logger.LogInformation("Overleg geannuleerd: beller {Caller} terug bij {From}; collega {Consult} vrij",
+                wt.CallerChannelId, wt.FromAgentName, wt.ConsultAgentName);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (resetAgent is not null)
+            await _agents.ResetToAvailableAsync(resetAgent, ct);
+        return true;
+    }
+
+    private WarmTransfer? FindWarmTransfer(string channelId)
+        => _warmByAgent.Values.FirstOrDefault(w =>
+            w.CallerChannelId == channelId || w.FromAgentChannelId == channelId || w.ConsultChannelId == channelId);
+
+    /// <summary>
+    /// Een kanaal van een lopend overleg viel weg. Aangeroepen terwijl _gate vastgehouden wordt; geeft
+    /// terug welke nazorg buiten de lock moet (nawerktijd-agent, vrij te geven collega, herdispatch).
+    /// </summary>
+    private async Task<(string? WrapUp, string? Reset, bool Requeued)> HandleWarmChannelGoneAsync(
+        WarmTransfer wt, string channelId, CancellationToken ct)
+    {
+        _warmByAgent.Remove(wt.FromAgentName);
+
+        if (channelId == wt.CallerChannelId)
+        {
+            // beller gaf op tijdens het overleg: beide agent-legs eruit, overlegbrug opruimen
+            await SafeHangupAsync(wt.FromAgentChannelId, ct);
+            await SafeHangupAsync(wt.ConsultChannelId, ct);
+            await SafeDestroyBridgeAsync(wt.BridgeId, ct);
+            _logger.LogInformation("Beller hing op tijdens overleg; {From} naar nawerktijd, collega {Consult} vrij",
+                wt.FromAgentName, wt.ConsultAgentName);
+            return (wt.FromAgentName, wt.ConsultAgentName, false);
+        }
+
+        if (channelId == wt.ConsultChannelId)
+        {
+            // collega nam niet op of hing op: beller terug bij de oorspronkelijke agent
+            await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct);
+            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.FromAgentName,
+                wt.QueueName, wt.CallerId, wt.BridgeId);
+            _logger.LogInformation("Collega {Consult} verliet het overleg; beller terug bij {From}",
+                wt.ConsultAgentName, wt.FromAgentName);
+            return (null, wt.ConsultAgentName, false);
+        }
+
+        // channelId == wt.FromAgentChannelId: de doorverbindende agent verbrak zelf
+        if (wt.Connected)
+        {
+            // collega zat al in het overleg: draag de beller over (alsof voltooid)
+            await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct);
+            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.ConsultAgentName,
+                wt.QueueName, wt.CallerId, wt.BridgeId);
+            _logger.LogInformation("Agent {From} verbrak tijdens overleg; beller overgedragen aan {Consult}",
+                wt.FromAgentName, wt.ConsultAgentName);
+            return (wt.FromAgentName, null, false);
+        }
+
+        // collega had nog niet opgenomen: beller terug in de wacht, collega vrijgeven
+        await SafeHangupAsync(wt.ConsultChannelId, ct);
+        _waiting.Add(new WaitingCaller(wt.CallerChannelId, wt.QueueName, wt.CallerId, DateTimeOffset.UtcNow));
+        _logger.LogInformation("Agent {From} verbrak vóór het overleg; beller terug in de wacht voor '{Queue}'",
+            wt.FromAgentName, wt.QueueName);
+        return (wt.FromAgentName, wt.ConsultAgentName, true);
+    }
+
+    private void RegisterActiveCall(string callerChannelId, string agentChannelId, string agentName,
+        string queueName, string callerId, string bridgeId)
+    {
+        var call = new ActiveCall
+        {
+            CallerChannelId = callerChannelId,
+            AgentChannelId = agentChannelId,
+            AgentName = agentName,
+            QueueName = queueName,
+            CallerId = callerId,
+            MixingBridgeId = bridgeId,
+        };
+        _activeByChannel[callerChannelId] = call;
+        _activeByChannel[agentChannelId] = call;
     }
 
     // --- Handmatig aannemen ---------------------------------------------------

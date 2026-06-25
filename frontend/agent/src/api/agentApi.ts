@@ -41,6 +41,10 @@ export const agentApi = {
   setPresence: (name: string, presence: Presence) => send(name, 'presence', { presence }),
   pickup: (name: string, callId: string) => send(name, `calls/${encodeURIComponent(callId)}/pickup`),
   transferToAgent: (name: string, agent: string) => send(name, 'transfer/agent', { agent }),
+  // Warm doorverbinden (overleg): starten met een collega, daarna voltooien of annuleren.
+  warmTransfer: (name: string, agent: string) => send(name, 'transfer/warm', { agent }),
+  completeWarmTransfer: (name: string) => send(name, 'transfer/warm/complete'),
+  cancelWarmTransfer: (name: string) => send(name, 'transfer/warm/cancel'),
   async searchDirectory(query: string, exclude?: string): Promise<DirectoryEntry[]> {
     const params = new URLSearchParams();
     if (query) params.set('q', query);

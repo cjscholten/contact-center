@@ -263,4 +263,177 @@ public class CallCoordinatorTests
         await coordinator.TryDispatchAllAsync();
         Assert.Equal(2, ari.Originates.Count);
     }
+
+    // --- Warm doorverbinden (overleg) -----------------------------------------
+
+    /// <summary>agent1001 in gesprek met caller-1; agent1002 ingelogd en beschikbaar. Originates leeg.</summary>
+    private static async Task<(CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents, string fromChannel)>
+        ActiveCallWithColleagueAsync(int wrapUpSeconds = 0)
+    {
+        var (coordinator, ari, agents) =
+            Build(wrapUpSeconds, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync("agent1001");
+        await agents.LoginAsync("agent1002");
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+        await coordinator.PickupAsync("agent1001", "caller-1");
+        var fromChannel = ari.Originates.Single().ChannelId;
+        await coordinator.OnAgentAnsweredAsync(fromChannel);
+        ari.Originates.Clear();
+        return (coordinator, ari, agents, fromChannel);
+    }
+
+    [Fact]
+    public async Task Warm_doorverbinden_belt_de_collega_en_zet_de_beller_in_de_wacht()
+    {
+        var (coordinator, ari, agents, _) = await ActiveCallWithColleagueAsync();
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.StartWarmTransferAsync("agent1001", "agent1002"));
+
+        var originate = Assert.Single(ari.Originates);
+        Assert.Equal("PJSIP/agent1002", originate.Endpoint);
+        Assert.Equal("consult", originate.AppArgs);
+        var holding = ari.BridgeTypes.First(b => b.Value == "holding").Key;
+        Assert.Contains((holding, "caller-1"), ari.Added);                              // beller geparkeerd
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync("agent1001"))!.Status);  // doorverbinder blijft in gesprek
+        Assert.Equal(AgentStatus.Ringing, (await agents.GetAsync("agent1002"))!.Status); // collega wordt gebeld
+    }
+
+    [Fact]
+    public async Task Overleg_aannemen_zet_de_collega_in_de_overlegbrug()
+    {
+        var (coordinator, ari, agents, _) = await ActiveCallWithColleagueAsync();
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        var bridge = ari.BridgeTypes.First(b => b.Value == "mixing").Key; // overlegbrug = hergebruikte mixing-brug
+        ari.Added.Clear();
+
+        await coordinator.OnConsultAnsweredAsync(consultChannel);
+
+        Assert.Contains((bridge, consultChannel), ari.Added); // collega bij de doorverbinder in de brug
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync("agent1002"))!.Status);
+    }
+
+    [Fact]
+    public async Task Overleg_voltooien_verbindt_de_beller_met_de_collega()
+    {
+        var (coordinator, ari, agents, fromChannel) = await ActiveCallWithColleagueAsync(wrapUpSeconds: 30);
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        await coordinator.OnConsultAnsweredAsync(consultChannel);
+        var bridge = ari.BridgeTypes.First(b => b.Value == "mixing").Key;
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.CompleteWarmTransferAsync("agent1001"));
+
+        Assert.Contains(fromChannel, ari.Hangups);                                       // doorverbinder eruit
+        Assert.Contains((bridge, "caller-1"), ari.Added);                                // beller bij de collega
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync("agent1002"))!.Status);
+
+        // de collega heeft nu het gesprek: ophangen door de beller zet hém in nawerktijd
+        await coordinator.OnChannelGoneAsync("caller-1");
+        Assert.Contains(consultChannel, ari.Hangups);
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1002"))!.Status);
+    }
+
+    [Fact]
+    public async Task Overleg_annuleren_haalt_de_beller_terug_bij_de_agent()
+    {
+        var (coordinator, ari, agents, _) = await ActiveCallWithColleagueAsync();
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        await coordinator.OnConsultAnsweredAsync(consultChannel);
+        var bridge = ari.BridgeTypes.First(b => b.Value == "mixing").Key;
+        ari.Added.Clear();
+
+        Assert.True(await coordinator.CancelWarmTransferAsync("agent1001"));
+
+        Assert.Contains(consultChannel, ari.Hangups);                                      // collega eruit
+        Assert.Contains((bridge, "caller-1"), ari.Added);                                  // beller terug bij agent1001
+        Assert.Equal(AgentStatus.Available, (await agents.GetAsync("agent1002"))!.Status); // collega vrij
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync("agent1001"))!.Status);
+        Assert.True(await coordinator.HoldAsync("agent1001")); // gesprek is weer actief en bedienbaar
+    }
+
+    [Fact]
+    public async Task Warm_doorverbinden_naar_bezette_collega_faalt_en_laat_het_gesprek_intact()
+    {
+        var (coordinator, ari, agents) = Build(0, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync("agent1001"); // agent1002 niet ingelogd
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+        await coordinator.PickupAsync("agent1001", "caller-1");
+        await coordinator.OnAgentAnsweredAsync(ari.Originates.Single().ChannelId);
+        ari.Originates.Clear();
+
+        Assert.False(await coordinator.StartWarmTransferAsync("agent1001", "agent1002"));
+        Assert.Empty(ari.Originates);                          // geen overlegleg gebeld
+        Assert.True(await coordinator.HoldAsync("agent1001")); // oorspronkelijke gesprek nog intact
+    }
+
+    [Fact]
+    public async Task Collega_neemt_overleg_niet_aan_geeft_de_beller_terug()
+    {
+        var (coordinator, ari, agents, _) = await ActiveCallWithColleagueAsync();
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        var bridge = ari.BridgeTypes.First(b => b.Value == "mixing").Key;
+        ari.Added.Clear();
+
+        await coordinator.OnChannelGoneAsync(consultChannel); // collega-leg verdwijnt zonder op te nemen
+
+        Assert.Contains((bridge, "caller-1"), ari.Added);                                  // beller terug bij agent1001
+        Assert.Equal(AgentStatus.Available, (await agents.GetAsync("agent1002"))!.Status); // collega vrij
+        Assert.True(await coordinator.HoldAsync("agent1001")); // gesprek weer actief
+    }
+
+    [Fact]
+    public async Task Beller_hangt_op_tijdens_overleg_ruimt_beide_legs_op()
+    {
+        var (coordinator, ari, agents, fromChannel) = await ActiveCallWithColleagueAsync(wrapUpSeconds: 30);
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        await coordinator.OnConsultAnsweredAsync(consultChannel);
+
+        await coordinator.OnChannelGoneAsync("caller-1");
+
+        Assert.Contains(fromChannel, ari.Hangups);     // doorverbinder eruit
+        Assert.Contains(consultChannel, ari.Hangups);  // collega eruit
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
+        Assert.Equal(AgentStatus.Available, (await agents.GetAsync("agent1002"))!.Status);
+    }
+
+    [Fact]
+    public async Task Doorverbinder_verbreekt_tijdens_overleg_draagt_de_beller_over_aan_de_collega()
+    {
+        var (coordinator, ari, agents, fromChannel) = await ActiveCallWithColleagueAsync(wrapUpSeconds: 30);
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        var consultChannel = ari.Originates.Single(o => o.AppArgs == "consult").ChannelId;
+        await coordinator.OnConsultAnsweredAsync(consultChannel);
+        var bridge = ari.BridgeTypes.First(b => b.Value == "mixing").Key;
+        ari.Added.Clear();
+
+        await coordinator.OnChannelGoneAsync(fromChannel); // doorverbinder verbreekt zelf
+
+        Assert.Contains((bridge, "caller-1"), ari.Added); // beller overgedragen aan de collega
+        Assert.Equal(AgentStatus.WrapUp, (await agents.GetAsync("agent1001"))!.Status);
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync("agent1002"))!.Status);
+    }
+
+    [Fact]
+    public async Task Overleg_voltooien_voordat_de_collega_opnam_faalt()
+    {
+        var (coordinator, ari, _, _) = await ActiveCallWithColleagueAsync();
+        await coordinator.StartWarmTransferAsync("agent1001", "agent1002");
+        Assert.False(await coordinator.CompleteWarmTransferAsync("agent1001")); // collega heeft nog niet opgenomen
+    }
+
+    [Fact]
+    public async Task Warm_doorverbinden_zonder_actief_gesprek_doet_niets()
+    {
+        var (coordinator, _, agents) = Build(0, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync("agent1001");
+        await agents.LoginAsync("agent1002");
+        Assert.False(await coordinator.StartWarmTransferAsync("agent1001", "agent1002"));
+    }
 }

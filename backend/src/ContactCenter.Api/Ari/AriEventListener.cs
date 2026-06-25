@@ -83,6 +83,10 @@ public sealed class AriEventListener(
         {
             switch (type)
             {
+                case "StasisStart" when IsConsultLeg(evt):
+                    // door de backend gebelde collega heeft het overleg (warm doorverbinden) aangenomen
+                    await coordinator.OnConsultAnsweredAsync(ChannelId(evt), ct);
+                    break;
                 case "StasisStart" when IsAgentLeg(evt):
                     // door de backend gebelde agent heeft opgenomen
                     await coordinator.OnAgentAnsweredAsync(ChannelId(evt), ct);
@@ -114,9 +118,14 @@ public sealed class AriEventListener(
         => evt.GetProperty("channel").GetProperty("id").GetString()!;
 
     /// <summary>Agent-legs worden door de backend ge-originate met appArg "agent".</summary>
-    private static bool IsAgentLeg(JsonElement evt)
+    private static bool IsAgentLeg(JsonElement evt) => HasFirstArg(evt, "agent");
+
+    /// <summary>Overleg-legs (warm doorverbinden) worden ge-originate met appArg "consult".</summary>
+    private static bool IsConsultLeg(JsonElement evt) => HasFirstArg(evt, "consult");
+
+    private static bool HasFirstArg(JsonElement evt, string value)
         => evt.TryGetProperty("args", out var args)
            && args.ValueKind == JsonValueKind.Array
            && args.GetArrayLength() > 0
-           && args[0].GetString() == "agent";
+           && args[0].GetString() == value;
 }
