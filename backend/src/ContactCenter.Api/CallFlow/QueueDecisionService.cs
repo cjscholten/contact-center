@@ -12,12 +12,13 @@ public sealed class QueueDecisionService
                 ? new PlayAndHangup(queue.ClosedPrompt)
                 : new ForwardTo(queue.AdHocForwardNumber);
 
-        return IsOpenAt(queue, utcNow)
+        return IsOpen(queue, utcNow)
             ? new RouteToQueue(queue.Name, queue.WelcomePrompt)
             : new PlayAndHangup(queue.ClosedPrompt);
     }
 
-    private static bool IsOpenAt(QueueConfig queue, DateTimeOffset utcNow)
+    /// <summary>Valt het huidige moment binnen een openingsvenster? (negeert ad-hoc sluiting.)</summary>
+    public bool IsOpen(QueueConfig queue, DateTimeOffset utcNow)
     {
         var timeZone = TimeZoneInfo.FindSystemTimeZoneById(queue.TimeZone);
         var local = TimeZoneInfo.ConvertTime(utcNow, timeZone);

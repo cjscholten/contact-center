@@ -1,0 +1,198 @@
+using System.Text.RegularExpressions;
+using ContactCenter.Api.CallFlow;
+using ContactCenter.Api.Data;
+using Microsoft.EntityFrameworkCore;
+
+namespace ContactCenter.Api.Admin;
+
+/// <summary>
+/// Beheer-API (/api/admin) voor ZetaBeheer: CRUD op de configuratie-entiteiten. Nog zonder
+/// authenticatie (Keycloak volgt) — alleen dev-only achter de NSG. B1 dekt de wachtrijen.
+/// De kernlogica (validatie + create/update) staat in losse, testbare methodes; de endpoints
+/// zijn dunne wrappers die het resultaat naar een HTTP-status vertalen.
+/// </summary>
+public static partial class AdminApi
+{
+    [GeneratedRegex("^[a-z0-9]+$")]
+    private static partial Regex QueueNameRegex();
+
+    [GeneratedRegex(@"^\+[0-9]{6,15}$")]
+    private static partial Regex E164Regex();
+
+    [GeneratedRegex(@"^\+?[0-9]{3,15}$")]
+    private static partial Regex ForwardNumberRegex();
+
+    public static void MapAdminApi(this WebApplication app)
+    {
+        var queues = app.MapGroup("/api/admin/queues");
+
+        queues.MapGet("", async (IDbContextFactory<CcDbContext> factory, QueueDecisionService decide, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var now = DateTimeOffset.UtcNow;
+            var all = await db.Queues.AsNoTracking()
+                .Include(q => q.Numbers)
+                .Include(q => q.OpeningHours)
+                .OrderBy(q => q.DisplayName)
+                .ToListAsync(ct);
+            return Results.Ok(all.Select(q => new QueueListItem(
+                q.Id, q.Name, q.DisplayName, q.Numbers.Count, q.AdHocClosed, IsOpenNow(decide, q, now))));
+        });
+
+        queues.MapGet("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var q = await db.Queues.AsNoTracking()
+                .Include(x => x.Numbers).Include(x => x.OpeningHours)
+                .FirstOrDefaultAsync(x => x.Id == id, ct);
+            return q is null ? Results.NotFound() : Results.Ok(ToDetail(q));
+        });
+
+        queues.MapPost("", async (QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await CreateQueueAsync(db, req, ct);
+            return result.Error is { } error
+                ? Results.BadRequest(new { error })
+                : Results.Created($"/api/admin/queues/{result.Detail!.Id}", result.Detail);
+        });
+
+        queues.MapPut("/{id:int}", async (int id, QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await UpdateQueueAsync(db, id, req, ct);
+            if (result is null) return Results.NotFound();
+            return result.Error is { } error ? Results.BadRequest(new { error }) : Results.Ok(result.Detail);
+        });
+
+        queues.MapDelete("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var q = await db.Queues.FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (q is null) return Results.NotFound();
+            db.Queues.Remove(q); // cascade verwijdert openingstijden + nummers
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        });
+    }
+
+    // --- Testbare kernlogica ---------------------------------------------------
+
+    public static async Task<QueueResult> CreateQueueAsync(CcDbContext db, QueueWriteRequest req, CancellationToken ct = default)
+    {
+        var name = req.Name.Trim();
+        if (!QueueNameRegex().IsMatch(name))
+            return QueueResult.Fail("Naam mag alleen kleine letters en cijfers bevatten (bv. 'sales').");
+        if (await db.Queues.AnyAsync(q => q.Name == name, ct))
+            return QueueResult.Fail($"Er bestaat al een wachtrij met de naam '{name}'.");
+        if (await ValidateAsync(db, req, queueId: null, ct) is { } error)
+            return QueueResult.Fail(error);
+
+        var q = new QueueConfig { Name = name, DisplayName = req.DisplayName.Trim() };
+        ApplyScalars(q, req);
+        ReplaceChildren(q, req);
+        db.Queues.Add(q);
+        await db.SaveChangesAsync(ct);
+        return QueueResult.Ok(ToDetail(q));
+    }
+
+    /// <summary>Werkt een wachtrij bij. Geeft null bij onbekende id; Name is read-only bij wijzigen.</summary>
+    public static async Task<QueueResult?> UpdateQueueAsync(CcDbContext db, int id, QueueWriteRequest req, CancellationToken ct = default)
+    {
+        var q = await db.Queues
+            .Include(x => x.Numbers).Include(x => x.OpeningHours)
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (q is null) return null;
+        if (await ValidateAsync(db, req, queueId: id, ct) is { } error)
+            return QueueResult.Fail(error);
+
+        q.DisplayName = req.DisplayName.Trim();
+        ApplyScalars(q, req);
+        ReplaceChildren(q, req);
+        await db.SaveChangesAsync(ct);
+        return QueueResult.Ok(ToDetail(q));
+    }
+
+    private static bool IsOpenNow(QueueDecisionService decide, QueueConfig q, DateTimeOffset now)
+    {
+        try { return decide.IsOpen(q, now); }
+        catch { return false; } // bv. onbekende tijdzone — toon dan 'dicht'
+    }
+
+    private static async Task<string?> ValidateAsync(CcDbContext db, QueueWriteRequest req, int? queueId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.DisplayName))
+            return "Weergavenaam is verplicht.";
+
+        try { _ = TimeZoneInfo.FindSystemTimeZoneById(req.TimeZone); }
+        catch { return $"Onbekende tijdzone '{req.TimeZone}'."; }
+
+        foreach (var w in req.OpeningHours)
+            if (w.Opens >= w.Closes)
+                return $"Openingsvenster op {w.Day} moet een eindtijd ná de begintijd hebben.";
+
+        var numbers = req.Numbers.Select(n => n.Trim()).Where(n => n.Length > 0).ToList();
+        foreach (var n in numbers)
+            if (!E164Regex().IsMatch(n))
+                return $"Ongeldig nummer '{n}' (verwacht E.164, bv. +319...).";
+        if (numbers.Distinct().Count() != numbers.Count)
+            return "De nummerlijst bevat dubbele nummers.";
+        var clash = await db.InboundNumbers
+            .Where(x => x.QueueConfigId != (queueId ?? 0) && numbers.Contains(x.Number))
+            .Select(x => x.Number).ToListAsync(ct);
+        if (clash.Count > 0)
+            return $"Nummer(s) al in gebruik door een andere wachtrij: {string.Join(", ", clash)}.";
+
+        if (!string.IsNullOrWhiteSpace(req.AdHocForwardNumber) && !ForwardNumberRegex().IsMatch(req.AdHocForwardNumber.Trim()))
+            return "Ongeldig doorschakelnummer.";
+
+        return null;
+    }
+
+    private static void ApplyScalars(QueueConfig q, QueueWriteRequest req)
+    {
+        q.WelcomePrompt = req.WelcomePrompt.Trim();
+        q.ClosedPrompt = req.ClosedPrompt.Trim();
+        q.TimeZone = req.TimeZone;
+        q.AdHocClosed = req.AdHocClosed;
+        q.AdHocForwardNumber = string.IsNullOrWhiteSpace(req.AdHocForwardNumber) ? null : req.AdHocForwardNumber.Trim();
+    }
+
+    private static void ReplaceChildren(QueueConfig q, QueueWriteRequest req)
+    {
+        q.OpeningHours.Clear();
+        foreach (var w in req.OpeningHours)
+            q.OpeningHours.Add(new OpeningHoursWindow { Day = w.Day, Opens = w.Opens, Closes = w.Closes });
+
+        q.Numbers.Clear();
+        foreach (var n in req.Numbers.Select(x => x.Trim()).Where(x => x.Length > 0).Distinct())
+            q.Numbers.Add(new InboundNumber { Number = n });
+    }
+
+    private static QueueDetail ToDetail(QueueConfig q) => new(
+        q.Id, q.Name, q.DisplayName, q.WelcomePrompt, q.ClosedPrompt,
+        q.AdHocClosed, q.AdHocForwardNumber, q.TimeZone,
+        [.. q.OpeningHours.OrderBy(w => w.Day).ThenBy(w => w.Opens).Select(w => new OpeningHoursDto(w.Day, w.Opens, w.Closes))],
+        [.. q.Numbers.OrderBy(n => n.Number).Select(n => n.Number)]);
+}
+
+public sealed record QueueResult(QueueDetail? Detail, string? Error)
+{
+    public static QueueResult Ok(QueueDetail detail) => new(detail, null);
+    public static QueueResult Fail(string error) => new(null, error);
+}
+
+public sealed record QueueListItem(
+    int Id, string Name, string DisplayName, int NumberCount, bool AdHocClosed, bool OpenNow);
+
+public sealed record OpeningHoursDto(DayOfWeek Day, TimeOnly Opens, TimeOnly Closes);
+
+public sealed record QueueDetail(
+    int Id, string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
+    bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers);
+
+public sealed record QueueWriteRequest(
+    string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
+    bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers);

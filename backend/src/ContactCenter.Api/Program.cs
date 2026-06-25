@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Serialization;
+using ContactCenter.Api.Admin;
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.CallFlow;
@@ -127,6 +128,9 @@ app.MapGet("/api/directory/search",
 // Wachtrij-overzicht: initiële stand; live updates lopen via de SignalR-hub.
 app.MapGet("/api/queues", async (CallCoordinator calls, CancellationToken ct)
     => Results.Ok(await calls.GetWaitingViewAsync(ct)));
+
+// Beheer-API (ZetaBeheer): CRUD op de configuratie. Nog onbeveiligd — Keycloak volgt.
+app.MapAdminApi();
 
 app.MapHub<ContactCenterHub>("/hub");
 
