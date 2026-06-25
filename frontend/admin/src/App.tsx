@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AppShell, Burger, Group, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AppShell, Burger, Group, NavLink, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconAddressBook,
@@ -9,6 +9,8 @@ import {
 } from '@tabler/icons-react';
 import { QueuesPage } from './components/QueuesPage';
 import { AgentsPage } from './components/AgentsPage';
+import { ContactsPage } from './components/ContactsPage';
+import { SettingsPage } from './components/SettingsPage';
 
 type Section = 'queues' | 'agents' | 'contacts' | 'settings';
 
@@ -22,7 +24,6 @@ const NAV: { key: Section; label: string; icon: typeof IconPhoneCall }[] = [
 export default function App() {
   const [section, setSection] = useState<Section>('queues');
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure();
-  const active = NAV.find((n) => n.key === section)!;
 
   return (
     <AppShell
@@ -60,11 +61,10 @@ export default function App() {
           <QueuesPage />
         ) : section === 'agents' ? (
           <AgentsPage />
+        ) : section === 'contacts' ? (
+          <ContactsPage />
         ) : (
-          <Stack gap="xs">
-            <Title order={2}>{active.label}</Title>
-            <Text c="dimmed">Dit onderdeel komt in een volgende fase.</Text>
-          </Stack>
+          <SettingsPage />
         )}
       </AppShell.Main>
     </AppShell>

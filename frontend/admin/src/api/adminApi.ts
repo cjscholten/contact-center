@@ -67,6 +67,23 @@ export interface AgentWriteRequest {
   queueIds: number[];
 }
 
+export interface Contact {
+  id: number;
+  name: string;
+  number: string;
+  department: string | null;
+}
+
+export interface ContactWriteRequest {
+  name: string;
+  number: string;
+  department: string | null;
+}
+
+export interface Settings {
+  wrapUpSeconds: number;
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBase}/api/admin/${path}`, {
     ...init,
@@ -97,4 +114,14 @@ export const adminApi = {
   updateAgent: (id: number, a: AgentWriteRequest) =>
     http<AgentDetail>(`agents/${id}`, { method: 'PUT', body: JSON.stringify(a) }),
   deleteAgent: (id: number) => http<void>(`agents/${id}`, { method: 'DELETE' }),
+
+  listContacts: () => http<Contact[]>('contacts'),
+  getContact: (id: number) => http<Contact>(`contacts/${id}`),
+  createContact: (c: ContactWriteRequest) => http<Contact>('contacts', { method: 'POST', body: JSON.stringify(c) }),
+  updateContact: (id: number, c: ContactWriteRequest) =>
+    http<Contact>(`contacts/${id}`, { method: 'PUT', body: JSON.stringify(c) }),
+  deleteContact: (id: number) => http<void>(`contacts/${id}`, { method: 'DELETE' }),
+
+  getSettings: () => http<Settings>('settings'),
+  updateSettings: (s: Settings) => http<Settings>('settings', { method: 'PUT', body: JSON.stringify(s) }),
 };

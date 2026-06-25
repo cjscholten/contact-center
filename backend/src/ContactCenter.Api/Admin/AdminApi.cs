@@ -13,6 +13,8 @@ namespace ContactCenter.Api.Admin;
 /// </summary>
 public static partial class AdminApi
 {
+    private const int DefaultWrapUpSeconds = 30;
+
     [GeneratedRegex("^[a-z0-9]+$")]
     private static partial Regex QueueNameRegex();
 
@@ -127,6 +129,65 @@ public static partial class AdminApi
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         });
+
+        var contacts = app.MapGroup("/api/admin/contacts");
+
+        contacts.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var all = await db.Contacts.AsNoTracking().OrderBy(c => c.Name).ToListAsync(ct);
+            return Results.Ok(all.Select(ToContactDto));
+        });
+
+        contacts.MapGet("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var c = await db.Contacts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+            return c is null ? Results.NotFound() : Results.Ok(ToContactDto(c));
+        });
+
+        contacts.MapPost("", async (ContactWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await CreateContactAsync(db, req, ct);
+            return result.Error is { } error
+                ? Results.BadRequest(new { error })
+                : Results.Created($"/api/admin/contacts/{result.Detail!.Id}", result.Detail);
+        });
+
+        contacts.MapPut("/{id:int}", async (int id, ContactWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await UpdateContactAsync(db, id, req, ct);
+            if (result is null) return Results.NotFound();
+            return result.Error is { } error ? Results.BadRequest(new { error }) : Results.Ok(result.Detail);
+        });
+
+        contacts.MapDelete("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var c = await db.Contacts.FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (c is null) return Results.NotFound();
+            db.Contacts.Remove(c);
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        });
+
+        var settings = app.MapGroup("/api/admin/settings");
+
+        settings.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var s = await db.Settings.AsNoTracking().FirstOrDefaultAsync(ct);
+            return Results.Ok(new SettingsDto(s?.WrapUpSeconds ?? DefaultWrapUpSeconds));
+        });
+
+        settings.MapPut("", async (SettingsWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var (dto, error) = await UpdateSettingsAsync(db, req, ct);
+            return error is { } e ? Results.BadRequest(new { error = e }) : Results.Ok(dto);
+        });
     }
 
     // --- Testbare kernlogica ---------------------------------------------------
@@ -228,6 +289,66 @@ public static partial class AdminApi
         a.Id, a.Name, a.DisplayName, a.Endpoint,
         [.. a.QueueAssignments.Select(qa => qa.QueueConfigId).OrderBy(x => x)]);
 
+    // --- Contacten -------------------------------------------------------------
+
+    public static async Task<ContactResult> CreateContactAsync(CcDbContext db, ContactWriteRequest req, CancellationToken ct = default)
+    {
+        if (ValidateContact(req) is { } error)
+            return ContactResult.Fail(error);
+        var c = new Contact
+        {
+            Name = req.Name.Trim(),
+            Number = req.Number.Trim(),
+            Department = string.IsNullOrWhiteSpace(req.Department) ? null : req.Department.Trim(),
+        };
+        db.Contacts.Add(c);
+        await db.SaveChangesAsync(ct);
+        return ContactResult.Ok(ToContactDto(c));
+    }
+
+    /// <summary>Werkt een contact bij. Geeft null bij onbekende id.</summary>
+    public static async Task<ContactResult?> UpdateContactAsync(CcDbContext db, int id, ContactWriteRequest req, CancellationToken ct = default)
+    {
+        var c = await db.Contacts.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (c is null) return null;
+        if (ValidateContact(req) is { } error)
+            return ContactResult.Fail(error);
+        c.Name = req.Name.Trim();
+        c.Number = req.Number.Trim();
+        c.Department = string.IsNullOrWhiteSpace(req.Department) ? null : req.Department.Trim();
+        await db.SaveChangesAsync(ct);
+        return ContactResult.Ok(ToContactDto(c));
+    }
+
+    private static string? ValidateContact(ContactWriteRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name))
+            return "Naam is verplicht.";
+        if (!E164Regex().IsMatch(req.Number.Trim()))
+            return $"Ongeldig nummer '{req.Number}' (verwacht E.164, bv. +319...).";
+        return null;
+    }
+
+    private static ContactDto ToContactDto(Contact c) => new(c.Id, c.Name, c.Number, c.Department);
+
+    // --- Instellingen ----------------------------------------------------------
+
+    public static async Task<(SettingsDto? Dto, string? Error)> UpdateSettingsAsync(
+        CcDbContext db, SettingsWriteRequest req, CancellationToken ct = default)
+    {
+        if (req.WrapUpSeconds is < 0 or > 3600)
+            return (null, "Nawerktijd moet tussen 0 en 3600 seconden liggen.");
+        var s = await db.Settings.FirstOrDefaultAsync(ct);
+        if (s is null)
+        {
+            s = new GlobalSettings();
+            db.Settings.Add(s);
+        }
+        s.WrapUpSeconds = req.WrapUpSeconds;
+        await db.SaveChangesAsync(ct);
+        return (new SettingsDto(s.WrapUpSeconds), null);
+    }
+
     private static bool IsOpenNow(QueueDecisionService decide, QueueConfig q, DateTimeOffset now)
     {
         try { return decide.IsOpen(q, now); }
@@ -326,3 +447,17 @@ public sealed record AgentDetail(
 
 public sealed record AgentWriteRequest(
     string Name, string DisplayName, string Endpoint, IReadOnlyList<int> QueueIds);
+
+public sealed record ContactResult(ContactDto? Detail, string? Error)
+{
+    public static ContactResult Ok(ContactDto detail) => new(detail, null);
+    public static ContactResult Fail(string error) => new(null, error);
+}
+
+public sealed record ContactDto(int Id, string Name, string Number, string? Department);
+
+public sealed record ContactWriteRequest(string Name, string Number, string? Department);
+
+public sealed record SettingsDto(int WrapUpSeconds);
+
+public sealed record SettingsWriteRequest(int WrapUpSeconds);
