@@ -12,7 +12,7 @@ import {
   Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconEdit, IconPlus, IconTrash } from '@tabler/icons-react';
+import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { adminApi, type QueueDetail, type QueueListItem } from '../api/adminApi';
 import { QueueEditorDrawer } from './QueueEditorDrawer';
 
@@ -91,7 +91,7 @@ export function QueuesPage() {
             </Table.Thead>
             <Table.Tbody>
               {queues.map((q) => (
-                <Table.Tr key={q.id}>
+                <Table.Tr key={q.id} style={{ cursor: 'pointer' }} onClick={() => void openEdit(q.id)}>
                   <Table.Td>
                     <Text fw={500}>{q.displayName}</Text>
                     <Text c="dimmed" size="xs">
@@ -101,14 +101,17 @@ export function QueuesPage() {
                   <Table.Td>{statusBadge(q)}</Table.Td>
                   <Table.Td>{q.numberCount}</Table.Td>
                   <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <ActionIcon variant="subtle" aria-label="Bewerken" onClick={() => void openEdit(q.id)}>
-                        <IconEdit size={18} />
-                      </ActionIcon>
-                      <ActionIcon variant="subtle" color="red" aria-label="Verwijderen" onClick={() => void remove(q)}>
-                        <IconTrash size={18} />
-                      </ActionIcon>
-                    </Group>
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      aria-label="Verwijderen"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void remove(q);
+                      }}
+                    >
+                      <IconTrash size={18} />
+                    </ActionIcon>
                   </Table.Td>
                 </Table.Tr>
               ))}

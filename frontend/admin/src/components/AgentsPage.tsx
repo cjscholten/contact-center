@@ -12,7 +12,7 @@ import {
   Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconEdit, IconPlus, IconTrash } from '@tabler/icons-react';
+import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { adminApi, type AgentDetail, type AgentListItem } from '../api/adminApi';
 import { AgentEditorDrawer } from './AgentEditorDrawer';
 
@@ -86,7 +86,7 @@ export function AgentsPage() {
             </Table.Thead>
             <Table.Tbody>
               {agents.map((a) => (
-                <Table.Tr key={a.id}>
+                <Table.Tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => void openEdit(a.id)}>
                   <Table.Td>
                     <Text fw={500}>{a.displayName}</Text>
                     <Text c="dimmed" size="xs">
@@ -112,14 +112,17 @@ export function AgentsPage() {
                     )}
                   </Table.Td>
                   <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <ActionIcon variant="subtle" aria-label="Bewerken" onClick={() => void openEdit(a.id)}>
-                        <IconEdit size={18} />
-                      </ActionIcon>
-                      <ActionIcon variant="subtle" color="red" aria-label="Verwijderen" onClick={() => void remove(a)}>
-                        <IconTrash size={18} />
-                      </ActionIcon>
-                    </Group>
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      aria-label="Verwijderen"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void remove(a);
+                      }}
+                    >
+                      <IconTrash size={18} />
+                    </ActionIcon>
                   </Table.Td>
                 </Table.Tr>
               ))}
