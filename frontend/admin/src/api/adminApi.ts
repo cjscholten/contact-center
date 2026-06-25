@@ -44,6 +44,29 @@ export interface QueueWriteRequest {
   numbers: string[];
 }
 
+export interface AgentListItem {
+  id: number;
+  name: string;
+  displayName: string;
+  endpoint: string;
+  queues: string[];
+}
+
+export interface AgentDetail {
+  id: number;
+  name: string;
+  displayName: string;
+  endpoint: string;
+  queueIds: number[];
+}
+
+export interface AgentWriteRequest {
+  name: string;
+  displayName: string;
+  endpoint: string;
+  queueIds: number[];
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBase}/api/admin/${path}`, {
     ...init,
@@ -67,4 +90,11 @@ export const adminApi = {
   updateQueue: (id: number, q: QueueWriteRequest) =>
     http<QueueDetail>(`queues/${id}`, { method: 'PUT', body: JSON.stringify(q) }),
   deleteQueue: (id: number) => http<void>(`queues/${id}`, { method: 'DELETE' }),
+
+  listAgents: () => http<AgentListItem[]>('agents'),
+  getAgent: (id: number) => http<AgentDetail>(`agents/${id}`),
+  createAgent: (a: AgentWriteRequest) => http<AgentDetail>('agents', { method: 'POST', body: JSON.stringify(a) }),
+  updateAgent: (id: number, a: AgentWriteRequest) =>
+    http<AgentDetail>(`agents/${id}`, { method: 'PUT', body: JSON.stringify(a) }),
+  deleteAgent: (id: number) => http<void>(`agents/${id}`, { method: 'DELETE' }),
 };

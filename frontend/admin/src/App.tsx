@@ -8,14 +8,15 @@ import {
   IconSettings,
 } from '@tabler/icons-react';
 import { QueuesPage } from './components/QueuesPage';
+import { AgentsPage } from './components/AgentsPage';
 
 type Section = 'queues' | 'agents' | 'contacts' | 'settings';
 
-const NAV: { key: Section; label: string; icon: typeof IconPhoneCall; ready: boolean }[] = [
-  { key: 'queues', label: 'Wachtrijen', icon: IconPhoneCall, ready: true },
-  { key: 'agents', label: 'Agents', icon: IconHeadset, ready: false },
-  { key: 'contacts', label: 'Contacten', icon: IconAddressBook, ready: false },
-  { key: 'settings', label: 'Instellingen', icon: IconSettings, ready: false },
+const NAV: { key: Section; label: string; icon: typeof IconPhoneCall }[] = [
+  { key: 'queues', label: 'Wachtrijen', icon: IconPhoneCall },
+  { key: 'agents', label: 'Agents', icon: IconHeadset },
+  { key: 'contacts', label: 'Contacten', icon: IconAddressBook },
+  { key: 'settings', label: 'Instellingen', icon: IconSettings },
 ];
 
 export default function App() {
@@ -55,8 +56,10 @@ export default function App() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {active.ready ? (
+        {section === 'queues' ? (
           <QueuesPage />
+        ) : section === 'agents' ? (
+          <AgentsPage />
         ) : (
           <Stack gap="xs">
             <Title order={2}>{active.label}</Title>

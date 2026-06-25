@@ -22,6 +22,9 @@ public static partial class AdminApi
     [GeneratedRegex(@"^\+?[0-9]{3,15}$")]
     private static partial Regex ForwardNumberRegex();
 
+    [GeneratedRegex(@"^[a-zA-Z0-9_.-]+$")]
+    private static partial Regex AgentNameRegex();
+
     public static void MapAdminApi(this WebApplication app)
     {
         var queues = app.MapGroup("/api/admin/queues");
@@ -74,6 +77,56 @@ public static partial class AdminApi
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         });
+
+        var agents = app.MapGroup("/api/admin/agents");
+
+        agents.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var all = await db.Agents.AsNoTracking()
+                .Include(a => a.QueueAssignments).ThenInclude(qa => qa.Queue)
+                .OrderBy(a => a.DisplayName)
+                .ToListAsync(ct);
+            return Results.Ok(all.Select(a => new AgentListItem(
+                a.Id, a.Name, a.DisplayName, a.Endpoint,
+                [.. a.QueueAssignments.Select(qa => qa.Queue!.DisplayName).OrderBy(n => n)])));
+        });
+
+        agents.MapGet("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var a = await db.Agents.AsNoTracking()
+                .Include(x => x.QueueAssignments)
+                .FirstOrDefaultAsync(x => x.Id == id, ct);
+            return a is null ? Results.NotFound() : Results.Ok(ToAgentDetail(a));
+        });
+
+        agents.MapPost("", async (AgentWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await CreateAgentAsync(db, req, ct);
+            return result.Error is { } error
+                ? Results.BadRequest(new { error })
+                : Results.Created($"/api/admin/agents/{result.Detail!.Id}", result.Detail);
+        });
+
+        agents.MapPut("/{id:int}", async (int id, AgentWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var result = await UpdateAgentAsync(db, id, req, ct);
+            if (result is null) return Results.NotFound();
+            return result.Error is { } error ? Results.BadRequest(new { error }) : Results.Ok(result.Detail);
+        });
+
+        agents.MapDelete("/{id:int}", async (int id, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var a = await db.Agents.FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (a is null) return Results.NotFound();
+            db.Agents.Remove(a); // cascade verwijdert de wachtrij-toewijzingen
+            await db.SaveChangesAsync(ct);
+            return Results.NoContent();
+        });
     }
 
     // --- Testbare kernlogica ---------------------------------------------------
@@ -112,6 +165,68 @@ public static partial class AdminApi
         await db.SaveChangesAsync(ct);
         return QueueResult.Ok(ToDetail(q));
     }
+
+    // --- Agents ----------------------------------------------------------------
+
+    public static async Task<AgentResult> CreateAgentAsync(CcDbContext db, AgentWriteRequest req, CancellationToken ct = default)
+    {
+        var name = req.Name.Trim();
+        if (!AgentNameRegex().IsMatch(name))
+            return AgentResult.Fail("Naam mag alleen letters, cijfers, '.', '_' en '-' bevatten.");
+        if (await db.Agents.AnyAsync(a => a.Name == name, ct))
+            return AgentResult.Fail($"Er bestaat al een agent met de naam '{name}'.");
+        if (await ValidateAgentAsync(db, req, ct) is { } error)
+            return AgentResult.Fail(error);
+
+        var agent = new Agent { Name = name, DisplayName = req.DisplayName.Trim(), Endpoint = req.Endpoint.Trim() };
+        ApplyAgentQueues(agent, req.QueueIds);
+        db.Agents.Add(agent);
+        await db.SaveChangesAsync(ct);
+        return AgentResult.Ok(ToAgentDetail(agent));
+    }
+
+    /// <summary>Werkt een agent bij. Geeft null bij onbekende id; Name is read-only bij wijzigen.</summary>
+    public static async Task<AgentResult?> UpdateAgentAsync(CcDbContext db, int id, AgentWriteRequest req, CancellationToken ct = default)
+    {
+        var agent = await db.Agents.Include(a => a.QueueAssignments).FirstOrDefaultAsync(a => a.Id == id, ct);
+        if (agent is null) return null;
+        if (await ValidateAgentAsync(db, req, ct) is { } error)
+            return AgentResult.Fail(error);
+
+        agent.DisplayName = req.DisplayName.Trim();
+        agent.Endpoint = req.Endpoint.Trim();
+        ApplyAgentQueues(agent, req.QueueIds);
+        await db.SaveChangesAsync(ct);
+        return AgentResult.Ok(ToAgentDetail(agent));
+    }
+
+    private static async Task<string?> ValidateAgentAsync(CcDbContext db, AgentWriteRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.DisplayName))
+            return "Weergavenaam is verplicht.";
+        if (string.IsNullOrWhiteSpace(req.Endpoint))
+            return "Endpoint is verplicht (bv. PJSIP/agent1001).";
+
+        var ids = req.QueueIds.Distinct().ToList();
+        if (ids.Count > 0)
+        {
+            var existing = await db.Queues.CountAsync(q => ids.Contains(q.Id), ct);
+            if (existing != ids.Count)
+                return "Eén of meer geselecteerde wachtrijen bestaan niet.";
+        }
+        return null;
+    }
+
+    private static void ApplyAgentQueues(Agent agent, IReadOnlyList<int> queueIds)
+    {
+        agent.QueueAssignments.Clear();
+        foreach (var id in queueIds.Distinct())
+            agent.QueueAssignments.Add(new AgentQueueAssignment { QueueConfigId = id });
+    }
+
+    private static AgentDetail ToAgentDetail(Agent a) => new(
+        a.Id, a.Name, a.DisplayName, a.Endpoint,
+        [.. a.QueueAssignments.Select(qa => qa.QueueConfigId).OrderBy(x => x)]);
 
     private static bool IsOpenNow(QueueDecisionService decide, QueueConfig q, DateTimeOffset now)
     {
@@ -196,3 +311,18 @@ public sealed record QueueWriteRequest(
     string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
     IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers);
+
+public sealed record AgentResult(AgentDetail? Detail, string? Error)
+{
+    public static AgentResult Ok(AgentDetail detail) => new(detail, null);
+    public static AgentResult Fail(string error) => new(null, error);
+}
+
+public sealed record AgentListItem(
+    int Id, string Name, string DisplayName, string Endpoint, IReadOnlyList<string> Queues);
+
+public sealed record AgentDetail(
+    int Id, string Name, string DisplayName, string Endpoint, IReadOnlyList<int> QueueIds);
+
+public sealed record AgentWriteRequest(
+    string Name, string DisplayName, string Endpoint, IReadOnlyList<int> QueueIds);
