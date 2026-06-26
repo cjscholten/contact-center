@@ -20,5 +20,21 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Keycloak (OIDC) in dev-mode op poort 8080. Het realm 'contactcenter' wordt bij
+  # elke start (her)geïmporteerd uit het gemounte JSON — die is de bron van waarheid.
+  # Vereist een NSG-regel voor TCP 8080 (zie keycloak/README.md). Dev-only: http, geen TLS.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: cc-keycloak
+    command: start-dev --import-realm
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: changeme-dev
+      KC_HOSTNAME_STRICT: "false"
+    volumes:
+      - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import/contactcenter-realm.json:ro
+
 volumes:
   pgdata:
