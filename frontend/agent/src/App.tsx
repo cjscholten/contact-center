@@ -1,26 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Center } from '@mantine/core';
+import { Button, Center, Loader, Stack, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { IconLogin } from '@tabler/icons-react';
+import { useAuth } from 'react-oidc-context';
 import { useSoftphone } from './softphone/useSoftphone';
 import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
 import { agentApi, type DirectoryEntry, type Presence } from './api/agentApi';
 import { asteriskHost } from './config';
-import { LoginForm } from './components/LoginForm';
+import { setAccessToken } from './auth/token';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
 
 function fail(title: string, e: unknown): void {
   notifications.show({ color: 'red', title, message: e instanceof Error ? e.message : String(e) });
 }
 
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <Center mih="100vh" p="md">
+      {children}
+    </Center>
+  );
+}
+
 export default function App() {
+  const auth = useAuth();
   const audioRef = useRef<HTMLAudioElement>(null);
   const sp = useSoftphone(audioRef);
   const [agentName, setAgentName] = useState<string | null>(null);
   const [onHold, setOnHold] = useState(false);
   const [consultWith, setConsultWith] = useState<string | null>(null);
+  const startedRef = useRef(false);
   const snapshot = useAgentSnapshot(agentName);
   const { waiting } = useContactCenterHub(agentName !== null);
+
+  // Het access-token beschikbaar maken voor de fetch-wrappers + SignalR.
+  useEffect(() => {
+    setAccessToken(auth.user?.access_token ?? null);
+  }, [auth.user]);
 
   // Wachtstand en overleg resetten zodra het gesprek eindigt (o.a. na voltooien van een overleg).
   useEffect(() => {
@@ -30,23 +47,38 @@ export default function App() {
     }
   }, [sp.callState]);
 
-  const login = async (user: string, password: string) => {
-    try {
-      await sp.connect(asteriskHost, user, password);
-      await agentApi.login(user);
-      setAgentName(user);
-    } catch (e) {
-      await sp.disconnect();
-      fail('Aanmelden mislukt', e);
+  // Na Keycloak-login: SIP-gegevens ophalen, softphone registreren, backend-login. Eénmalig per sessie.
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.user || startedRef.current) return;
+    startedRef.current = true;
+    const username = auth.user.profile.preferred_username;
+    if (!username) {
+      fail('Aanmelden mislukt', new Error('Token bevat geen preferred_username'));
+      return;
     }
-  };
+    void (async () => {
+      try {
+        const sip = await agentApi.getSipCredentials();
+        await sp.connect(asteriskHost, sip.username, sip.password);
+        await agentApi.login(username);
+        setAgentName(username);
+      } catch (e) {
+        startedRef.current = false; // mislukt: een nieuwe poging toestaan
+        await sp.disconnect();
+        fail('Verbinden mislukt', e);
+      }
+    })();
+  }, [auth.isAuthenticated, auth.user, sp]);
 
   const logout = async () => {
     if (agentName) {
-      try { await agentApi.logout(agentName); } catch { /* backend weg; SIP toch afsluiten */ }
+      try { await agentApi.logout(agentName); } catch { /* backend weg; toch afmelden */ }
     }
     await sp.disconnect();
     setAgentName(null);
+    startedRef.current = false;
+    setAccessToken(null);
+    await auth.signoutRedirect();
   };
 
   const toggleHold = async () => {
@@ -137,37 +169,64 @@ export default function App() {
     setConsultWith(null);
   };
 
+  let content: React.ReactNode;
+  if (auth.isLoading) {
+    content = <Loader />;
+  } else if (auth.error) {
+    content = (
+      <Stack align="center">
+        <Title order={4}>Aanmelden mislukt</Title>
+        <Text c="dimmed" size="sm">{auth.error.message}</Text>
+        <Button onClick={() => void auth.signinRedirect()}>Opnieuw proberen</Button>
+      </Stack>
+    );
+  } else if (!auth.isAuthenticated) {
+    content = (
+      <Stack align="center">
+        <Title order={2}>ZetaDesk</Title>
+        <Button size="md" leftSection={<IconLogin size={18} />} onClick={() => void auth.signinRedirect()}>
+          Aanmelden met Keycloak
+        </Button>
+      </Stack>
+    );
+  } else if (!agentName) {
+    content = (
+      <Stack align="center">
+        <Loader />
+        <Text c="dimmed">Verbinden…</Text>
+      </Stack>
+    );
+  } else {
+    content = (
+      <ZetaDeskShell
+        agentName={agentName}
+        status={snapshot?.status ?? 'LoggedOut'}
+        presence={snapshot?.presence ?? 'Available'}
+        callState={sp.callState}
+        onHold={onHold}
+        consultWith={consultWith}
+        waiting={waiting}
+        canPickup={sp.callState === 'idle'}
+        onAnswer={() => void sp.answer()}
+        onHangup={() => void sp.hangup()}
+        onToggleHold={() => void toggleHold()}
+        onFinishWrapUp={() => void finishWrapUp()}
+        onSetPresence={(p) => void setPresence(p)}
+        onPickup={(id) => void pickup(id)}
+        onSearch={search}
+        onTransfer={(e) => void transfer(e)}
+        onWarmTransfer={(e) => void startWarmTransfer(e)}
+        onCompleteWarmTransfer={() => void completeWarmTransfer()}
+        onCancelWarmTransfer={() => void cancelWarmTransfer()}
+        onLogout={() => void logout()}
+      />
+    );
+  }
+
   return (
     <>
       <audio ref={audioRef} autoPlay />
-      {agentName ? (
-        <ZetaDeskShell
-          agentName={agentName}
-          status={snapshot?.status ?? 'LoggedOut'}
-          presence={snapshot?.presence ?? 'Available'}
-          callState={sp.callState}
-          onHold={onHold}
-          consultWith={consultWith}
-          waiting={waiting}
-          canPickup={sp.callState === 'idle'}
-          onAnswer={() => void sp.answer()}
-          onHangup={() => void sp.hangup()}
-          onToggleHold={() => void toggleHold()}
-          onFinishWrapUp={() => void finishWrapUp()}
-          onSetPresence={(p) => void setPresence(p)}
-          onPickup={(id) => void pickup(id)}
-          onSearch={search}
-          onTransfer={(e) => void transfer(e)}
-          onWarmTransfer={(e) => void startWarmTransfer(e)}
-          onCompleteWarmTransfer={() => void completeWarmTransfer()}
-          onCancelWarmTransfer={() => void cancelWarmTransfer()}
-          onLogout={() => void logout()}
-        />
-      ) : (
-        <Center mih="100vh" p="md">
-          <LoginForm onLogin={login} />
-        </Center>
-      )}
+      {agentName ? content : <Centered>{content}</Centered>}
     </>
   );
 }

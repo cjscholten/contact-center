@@ -15,8 +15,10 @@
     "@mantine/notifications": "^9.3.2",
     "@microsoft/signalr": "^10.0.0",
     "@tabler/icons-react": "^3.44.0",
+    "oidc-client-ts": "^3.5.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-oidc-context": "^3.3.1",
     "sip.js": "^0.21.2"
   },
   "devDependencies": {

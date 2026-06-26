@@ -4,7 +4,7 @@
   "sslRequired": "none",
   "registrationAllowed": false,
   "loginTheme": "keycloak",
-  "accessTokenLifespan": 900,
+  "accessTokenLifespan": 3600,
   "roles": {
     "realm": [
       { "name": "agent", "description": "Contactcenter-agent (ZetaDesk)" },

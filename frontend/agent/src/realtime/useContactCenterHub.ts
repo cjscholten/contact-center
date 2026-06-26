@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { type HubConnection, HubConnectionBuilder } from '@microsoft/signalr';
 import { apiBase } from '../config';
+import { authHeader, getAccessToken } from '../auth/token';
 
 export interface WaitingCall {
   callId: string;
@@ -26,14 +27,14 @@ export function useContactCenterHub(enabled: boolean): { waiting: WaitingCall[] 
 
     void (async () => {
       try {
-        const response = await fetch(`${apiBase}/api/queues`);
+        const response = await fetch(`${apiBase}/api/queues`, { headers: authHeader() });
         if (response.ok && !cancelled) setWaiting(await response.json());
       } catch {
         /* hub-update volgt zodra de verbinding staat */
       }
 
       connection = new HubConnectionBuilder()
-        .withUrl(`${apiBase}/hub`)
+        .withUrl(`${apiBase}/hub`, { accessTokenFactory: () => getAccessToken() ?? '' })
         .withAutomaticReconnect()
         .build();
       connection.on('queuesChanged', (w: WaitingCall[]) => setWaiting(w));
