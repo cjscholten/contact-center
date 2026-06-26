@@ -1,4 +1,5 @@
 import { apiBase } from '../config';
+import { authHeader } from '../auth/token';
 
 export type DayOfWeek =
   | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
@@ -85,10 +86,9 @@ export interface Settings {
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${apiBase}/api/admin/${path}`, {
-    ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
-  });
+  const headers: Record<string, string> = { ...authHeader() };
+  if (init?.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${apiBase}/api/admin/${path}`, { ...init, headers });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {

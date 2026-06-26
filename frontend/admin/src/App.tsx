@@ -1,16 +1,20 @@
-import { useState } from 'react';
-import { AppShell, Burger, Group, NavLink, Text, Title } from '@mantine/core';
+import { useEffect, useState } from 'react';
+import { AppShell, Burger, Button, Center, Group, Loader, NavLink, Stack, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconAddressBook,
   IconHeadset,
+  IconLogin,
+  IconLogout,
   IconPhoneCall,
   IconSettings,
 } from '@tabler/icons-react';
+import { useAuth } from 'react-oidc-context';
 import { QueuesPage } from './components/QueuesPage';
 import { AgentsPage } from './components/AgentsPage';
 import { ContactsPage } from './components/ContactsPage';
 import { SettingsPage } from './components/SettingsPage';
+import { realmRolesFromToken, setAccessToken } from './auth/token';
 
 type Section = 'queues' | 'agents' | 'contacts' | 'settings';
 
@@ -21,7 +25,70 @@ const NAV: { key: Section; label: string; icon: typeof IconPhoneCall }[] = [
   { key: 'settings', label: 'Instellingen', icon: IconSettings },
 ];
 
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <Center mih="100vh" p="md">
+      {children}
+    </Center>
+  );
+}
+
 export default function App() {
+  const auth = useAuth();
+
+  useEffect(() => {
+    setAccessToken(auth.user?.access_token ?? null);
+  }, [auth.user]);
+
+  const logout = () => {
+    setAccessToken(null);
+    void auth.signoutRedirect();
+  };
+
+  if (auth.isLoading) {
+    return <Centered><Loader /></Centered>;
+  }
+  if (auth.error) {
+    return (
+      <Centered>
+        <Stack align="center">
+          <Title order={4}>Aanmelden mislukt</Title>
+          <Text c="dimmed" size="sm">{auth.error.message}</Text>
+          <Button onClick={() => void auth.signinRedirect()}>Opnieuw proberen</Button>
+        </Stack>
+      </Centered>
+    );
+  }
+  if (!auth.isAuthenticated) {
+    return (
+      <Centered>
+        <Stack align="center">
+          <Title order={2}>ZetaBeheer</Title>
+          <Button size="md" leftSection={<IconLogin size={18} />} onClick={() => void auth.signinRedirect()}>
+            Aanmelden met Keycloak
+          </Button>
+        </Stack>
+      </Centered>
+    );
+  }
+  if (!realmRolesFromToken(auth.user?.access_token).includes('admin')) {
+    return (
+      <Centered>
+        <Stack align="center">
+          <Title order={3}>Geen toegang</Title>
+          <Text c="dimmed" size="sm">Je account heeft de rol 'admin' nodig voor de beheeromgeving.</Text>
+          <Button variant="default" leftSection={<IconLogout size={16} />} onClick={logout}>
+            Afmelden
+          </Button>
+        </Stack>
+      </Centered>
+    );
+  }
+
+  return <AdminShell username={auth.user?.profile.preferred_username ?? ''} onLogout={logout} />;
+}
+
+function AdminShell({ username, onLogout }: { username: string; onLogout: () => void }) {
   const [section, setSection] = useState<Section>('queues');
   const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure();
 
@@ -32,12 +99,22 @@ export default function App() {
       padding="md"
     >
       <AppShell.Header>
-        <Group h="100%" px="md" gap="xs">
-          <Burger opened={navOpened} onClick={toggleNav} hiddenFrom="sm" size="sm" />
-          <Title order={3}>ZetaBeheer</Title>
-          <Text c="dimmed" size="sm">
-            beheeromgeving
-          </Text>
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group gap="xs" wrap="nowrap">
+            <Burger opened={navOpened} onClick={toggleNav} hiddenFrom="sm" size="sm" />
+            <Title order={3}>ZetaBeheer</Title>
+            <Text c="dimmed" size="sm" visibleFrom="xs">
+              beheeromgeving
+            </Text>
+          </Group>
+          <Group gap="sm" wrap="nowrap">
+            <Text size="sm" c="dimmed">
+              {username}
+            </Text>
+            <Button variant="subtle" color="gray" size="compact-sm" leftSection={<IconLogout size={16} />} onClick={onLogout}>
+              Afmelden
+            </Button>
+          </Group>
         </Group>
       </AppShell.Header>
 
