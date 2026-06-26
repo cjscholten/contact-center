@@ -39,6 +39,7 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
             e.HasIndex(a => a.Name).IsUnique();
             e.Property(a => a.DisplayName).HasMaxLength(100);
             e.Property(a => a.Endpoint).HasMaxLength(60);
+            e.Property(a => a.SipPassword).HasMaxLength(100).HasDefaultValue("changeme-dev");
             e.HasMany(a => a.QueueAssignments).WithOne().HasForeignKey(qa => qa.AgentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

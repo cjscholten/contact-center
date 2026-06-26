@@ -29,7 +29,9 @@ public static partial class AdminApi
 
     public static void MapAdminApi(this WebApplication app)
     {
-        var queues = app.MapGroup("/api/admin/queues");
+        var admin = app.MapGroup("/api/admin").RequireAuthorization("admin");
+
+        var queues = admin.MapGroup("/queues");
 
         queues.MapGet("", async (IDbContextFactory<CcDbContext> factory, QueueDecisionService decide, CancellationToken ct) =>
         {
@@ -80,7 +82,7 @@ public static partial class AdminApi
             return Results.NoContent();
         });
 
-        var agents = app.MapGroup("/api/admin/agents");
+        var agents = admin.MapGroup("/agents");
 
         agents.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
         {
@@ -130,7 +132,7 @@ public static partial class AdminApi
             return Results.NoContent();
         });
 
-        var contacts = app.MapGroup("/api/admin/contacts");
+        var contacts = admin.MapGroup("/contacts");
 
         contacts.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
         {
@@ -173,7 +175,7 @@ public static partial class AdminApi
             return Results.NoContent();
         });
 
-        var settings = app.MapGroup("/api/admin/settings");
+        var settings = admin.MapGroup("/settings");
 
         settings.MapGet("", async (IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
         {

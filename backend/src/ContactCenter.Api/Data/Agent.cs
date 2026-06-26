@@ -12,5 +12,9 @@ public class Agent
     /// <summary>PJSIP-endpoint van de agent, bv. "PJSIP/agent1001".</summary>
     public required string Endpoint { get; set; }
 
+    /// <summary>SIP-wachtwoord voor de WebRTC-registratie; uitgegeven via /api/agents/me/sip
+    /// na Keycloak-login. Dev: gelijk aan de waarde in pjsip.conf.</summary>
+    public string SipPassword { get; set; } = "changeme-dev";
+
     public List<AgentQueueAssignment> QueueAssignments { get; set; } = [];
 }
