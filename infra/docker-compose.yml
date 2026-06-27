@@ -7,6 +7,9 @@ services:
     container_name: cc-asterisk
     network_mode: host
     restart: unless-stopped
+    volumes:
+      # Gedeelde map met gegenereerde audio (TTS, eigen muziek); Asterisk speelt 'sound:custom/...'.
+      - cc-sounds:/usr/share/asterisk/sounds/custom
 
   postgres:
     image: postgres:17
@@ -36,5 +39,28 @@ services:
     volumes:
       - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import/contactcenter-realm.json:ro
 
+  # Backend-API (.NET) op poort 5080, naast Asterisk/Postgres/Keycloak. Via network_mode
+  # host zijn die op localhost bereikbaar. extra_hosts laat de publieke VM-naam naar loopback
+  # wijzen: zo klopt de token-issuer (publiek IP, want de browser haalt het token daar) én
+  # bereikt de backend Keycloak/ARI/DB lokaal (geen NAT-hairpin nodig). VmHost zet ARI/DB/
+  # Keycloak op dat (publieke) adres. Vereist een NSG-regel voor TCP 5080 (front-ends → backend).
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/backend/Dockerfile
+    container_name: cc-backend
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    extra_hosts:
+      - "20.107.0.204:127.0.0.1"
+    environment:
+      VmHost: "20.107.0.204"
+      Sounds__CustomDir: /var/lib/cc-sounds
+    volumes:
+      - cc-sounds:/var/lib/cc-sounds
+
 volumes:
   pgdata:
+  cc-sounds:
