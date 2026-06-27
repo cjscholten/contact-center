@@ -21,6 +21,7 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options) : DbConte
             e.Property(q => q.ClosedPrompt).HasMaxLength(200);
             e.Property(q => q.AdHocForwardNumber).HasMaxLength(20);
             e.Property(q => q.TimeZone).HasMaxLength(60);
+            e.Property(q => q.MusicOnHoldClass).HasMaxLength(60).HasDefaultValue("default");
             e.HasMany(q => q.OpeningHours).WithOne().HasForeignKey(w => w.QueueConfigId)
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasMany(q => q.Numbers).WithOne().HasForeignKey(n => n.QueueConfigId)

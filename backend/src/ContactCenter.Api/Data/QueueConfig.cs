@@ -23,6 +23,9 @@ public class QueueConfig
     /// <summary>IANA-tijdzone waarin de openingstijden gelden.</summary>
     public string TimeZone { get; set; } = "Europe/Amsterdam";
 
+    /// <summary>Asterisk music-on-hold-klasse voor de wachtmuziek (uit musiconhold.conf).</summary>
+    public string MusicOnHoldClass { get; set; } = "default";
+
     public List<OpeningHoursWindow> OpeningHours { get; set; } = [];
 
     public List<InboundNumber> Numbers { get; set; } = [];

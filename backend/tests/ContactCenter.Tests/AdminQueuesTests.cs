@@ -12,10 +12,11 @@ public class AdminQueuesTests
         IReadOnlyList<OpeningHoursDto>? hours = null,
         IReadOnlyList<string>? numbers = null,
         bool adHocClosed = false,
-        string? forward = null)
+        string? forward = null,
+        string moh = "default")
         => new(name, display, "sound:welcome", "sound:closed", adHocClosed, forward, "Europe/Amsterdam",
             hours ?? [new OpeningHoursDto(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0))],
-            numbers ?? ["+31201234599"]);
+            numbers ?? ["+31201234599"], moh);
 
     [Fact]
     public async Task Create_geldige_wachtrij_slaat_nummers_en_openingstijden_op()

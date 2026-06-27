@@ -31,6 +31,7 @@ export interface QueueDetail {
   timeZone: string;
   openingHours: OpeningHours[];
   numbers: string[];
+  musicOnHoldClass: string;
 }
 
 export interface QueueWriteRequest {
@@ -43,6 +44,7 @@ export interface QueueWriteRequest {
   timeZone: string;
   openingHours: OpeningHours[];
   numbers: string[];
+  musicOnHoldClass: string;
 }
 
 export interface AgentListItem {

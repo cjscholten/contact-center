@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
@@ -15,7 +16,7 @@ namespace ContactCenter.Api.CallFlow;
 /// </summary>
 public sealed class CallCoordinator : IHostedService
 {
-    private const string MohQueueWaiting = "default";
+    private const string DefaultMohClass = "default";
 
     private const string ForwardContext = "cc-forward";
 
@@ -32,6 +33,7 @@ public sealed class CallCoordinator : IHostedService
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, string> _holdingBridges = new(StringComparer.Ordinal); // queue → bridgeId
+    private readonly ConcurrentDictionary<string, string> _mohByQueue = new(StringComparer.Ordinal); // queue → MoH-klasse
     private readonly List<WaitingCaller> _waiting = [];
     private readonly Dictionary<string, PendingConnect> _pending = new(StringComparer.Ordinal); // agentChannelId → pending
     private readonly Dictionary<string, ActiveCall> _activeByChannel = new(StringComparer.Ordinal);
@@ -93,6 +95,7 @@ public sealed class CallCoordinator : IHostedService
     public async Task EnqueueCallerAsync(string callerChannelId, string queueName, string callerId,
         CancellationToken ct = default)
     {
+        _mohByQueue[queueName] = await ResolveMohClassAsync(queueName, ct); // huidige MoH-klasse, vóór de lock
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
@@ -733,7 +736,27 @@ public sealed class CallCoordinator : IHostedService
         }
 
         await _ari.AddToBridgeAsync(bridgeId, channelId, ct);
-        await _ari.StartBridgeMohAsync(bridgeId, MohQueueWaiting, ct);
+        await _ari.StartBridgeMohAsync(bridgeId, _mohByQueue.GetValueOrDefault(queueName, DefaultMohClass), ct);
+    }
+
+    /// <summary>Leest de music-on-hold-klasse van de wachtrij; terugval op "default" bij fout/leeg.</summary>
+    private async Task<string> ResolveMohClassAsync(string queueName, CancellationToken ct)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var moh = await db.Queues.AsNoTracking()
+                .Where(q => q.Name == queueName)
+                .Select(q => q.MusicOnHoldClass)
+                .FirstOrDefaultAsync(ct);
+            return string.IsNullOrWhiteSpace(moh) ? DefaultMohClass : moh;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("MoH-klasse voor '{Queue}' niet leesbaar ({Reden}); standaard gebruikt",
+                queueName, ex.Message);
+            return DefaultMohClass;
+        }
     }
 
     private PendingConnect? FindPendingByCaller(string callerChannelId)

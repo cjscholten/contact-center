@@ -394,6 +394,7 @@ public static partial class AdminApi
         q.TimeZone = req.TimeZone;
         q.AdHocClosed = req.AdHocClosed;
         q.AdHocForwardNumber = string.IsNullOrWhiteSpace(req.AdHocForwardNumber) ? null : req.AdHocForwardNumber.Trim();
+        q.MusicOnHoldClass = string.IsNullOrWhiteSpace(req.MusicOnHoldClass) ? "default" : req.MusicOnHoldClass.Trim();
     }
 
     private static void ReplaceChildren(QueueConfig q, QueueWriteRequest req)
@@ -411,7 +412,8 @@ public static partial class AdminApi
         q.Id, q.Name, q.DisplayName, q.WelcomePrompt, q.ClosedPrompt,
         q.AdHocClosed, q.AdHocForwardNumber, q.TimeZone,
         [.. q.OpeningHours.OrderBy(w => w.Day).ThenBy(w => w.Opens).Select(w => new OpeningHoursDto(w.Day, w.Opens, w.Closes))],
-        [.. q.Numbers.OrderBy(n => n.Number).Select(n => n.Number)]);
+        [.. q.Numbers.OrderBy(n => n.Number).Select(n => n.Number)],
+        q.MusicOnHoldClass);
 }
 
 public sealed record QueueResult(QueueDetail? Detail, string? Error)
@@ -428,12 +430,12 @@ public sealed record OpeningHoursDto(DayOfWeek Day, TimeOnly Opens, TimeOnly Clo
 public sealed record QueueDetail(
     int Id, string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
-    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers);
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
 
 public sealed record QueueWriteRequest(
     string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
-    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers);
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
 
 public sealed record AgentResult(AgentDetail? Detail, string? Error)
 {

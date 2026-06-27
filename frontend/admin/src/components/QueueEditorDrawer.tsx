@@ -44,6 +44,7 @@ interface FormState {
   adHocForwardNumber: string;
   windows: Window[];
   numbers: string[];
+  musicOnHoldClass: string;
 }
 
 const DAYS: { value: DayOfWeek; label: string }[] = [
@@ -57,6 +58,9 @@ const DAYS: { value: DayOfWeek; label: string }[] = [
 ];
 
 const TIMEZONES = ['Europe/Amsterdam', 'Europe/Brussels', 'Europe/London', 'UTC', 'America/New_York'];
+
+// Moet overeenkomen met de klassen in musiconhold.conf op de Asterisk-host.
+const MOH_CLASSES = ['default', 'office'];
 
 let seq = 0;
 const nextId = () => ++seq;
@@ -76,6 +80,7 @@ function defaultForm(): FormState {
     adHocForwardNumber: '',
     windows: workdays.map((day) => ({ id: nextId(), day, opens: '09:00', closes: '17:00' })),
     numbers: [],
+    musicOnHoldClass: 'default',
   };
 }
 
@@ -95,6 +100,7 @@ function fromDetail(q: QueueDetail): FormState {
       closes: toInputTime(w.closes),
     })),
     numbers: [...q.numbers],
+    musicOnHoldClass: q.musicOnHoldClass,
   };
 }
 
@@ -136,6 +142,7 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
       timeZone: form.timeZone,
       openingHours: form.windows.map((w) => ({ day: w.day, opens: toApiTime(w.opens), closes: toApiTime(w.closes) })),
       numbers: form.numbers.map((n) => n.trim()).filter(Boolean),
+      musicOnHoldClass: form.musicOnHoldClass,
     };
     try {
       if (isNew) await adminApi.createQueue(body);
@@ -197,14 +204,23 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
               onChange={(e) => patch({ closedPrompt: e.currentTarget.value })}
             />
           </Group>
-          <Select
-            label="Tijdzone"
-            description="IANA-tijdzone voor de openingstijden"
-            data={tzData}
-            value={form.timeZone}
-            searchable
-            onChange={(v) => v && patch({ timeZone: v })}
-          />
+          <Group grow>
+            <Select
+              label="Tijdzone"
+              description="IANA-tijdzone voor de openingstijden"
+              data={tzData}
+              value={form.timeZone}
+              searchable
+              onChange={(v) => v && patch({ timeZone: v })}
+            />
+            <Select
+              label="Wachtmuziek"
+              description="Music-on-hold-klasse"
+              data={MOH_CLASSES}
+              value={form.musicOnHoldClass}
+              onChange={(v) => v && patch({ musicOnHoldClass: v })}
+            />
+          </Group>
 
           <Divider label="Ad-hoc sluiting" labelPosition="left" mt="sm" />
           <Switch

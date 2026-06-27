@@ -61,6 +61,7 @@ public sealed class FakeAriClient : IAriClient
     public List<string> DestroyedBridges = [];
     public List<string> Hangups = [];
     public List<string> MohStarted = [];
+    public List<(string Bridge, string Class)> MohStartedWithClass = [];
     public List<(string Channel, string Context, string Extension)> Continued = [];
 
     private int _bridgeSeq;
@@ -110,6 +111,7 @@ public sealed class FakeAriClient : IAriClient
     public Task StartBridgeMohAsync(string bridgeId, string mohClass = "default", CancellationToken ct = default)
     {
         MohStarted.Add(bridgeId);
+        MohStartedWithClass.Add((bridgeId, mohClass));
         return Task.CompletedTask;
     }
 

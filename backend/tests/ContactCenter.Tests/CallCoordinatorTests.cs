@@ -1,5 +1,6 @@
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.CallFlow;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ContactCenter.Tests;
@@ -435,5 +436,27 @@ public class CallCoordinatorTests
         await agents.LoginAsync("agent1001");
         await agents.LoginAsync("agent1002");
         Assert.False(await coordinator.StartWarmTransferAsync("agent1001", "agent1002"));
+    }
+
+    [Fact]
+    public async Task Wachtmuziek_gebruikt_de_klasse_van_de_wachtrij()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(0, ("agent1001", ["support"]));
+        await using (var setup = factory.CreateDbContext())
+        {
+            var q = await setup.Queues.FirstAsync(x => x.Name == "support");
+            q.MusicOnHoldClass = "office";
+            await setup.SaveChangesAsync();
+        }
+        var ari = new FakeAriClient();
+        var agents = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
+        var coordinator = new CallCoordinator(
+            ari, agents, factory, new FakeRealtimeNotifier(), NullLogger<CallCoordinator>.Instance);
+
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
+
+        var holding = ari.BridgeTypes.First(b => b.Value == "holding").Key;
+        Assert.Contains((holding, "office"), ari.MohStartedWithClass);
     }
 }
