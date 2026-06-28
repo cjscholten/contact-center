@@ -44,6 +44,7 @@
   "users": [
     {
       "username": "agent1001",
+      "email": "agent1001@example.local",
       "enabled": true,
       "emailVerified": true,
       "firstName": "Agent",
@@ -53,6 +54,7 @@
     },
     {
       "username": "agent1002",
+      "email": "agent1002@example.local",
       "enabled": true,
       "emailVerified": true,
       "firstName": "Agent",
@@ -62,6 +64,7 @@
     },
     {
       "username": "beheerder",
+      "email": "beheerder@example.local",
       "enabled": true,
       "emailVerified": true,
       "firstName": "Beheer",
