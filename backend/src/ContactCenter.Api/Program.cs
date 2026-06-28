@@ -61,7 +61,15 @@ builder.Services.AddSingleton<InboundCallHandler>();
 builder.Services.AddHostedService<AriEventListener>();
 
 // Keycloak (OIDC) — valideert de JWT's van ZetaDesk/ZetaBeheer. Dev: http (geen TLS).
+// Authority = waar de backend de metadata/JWKS ophaalt (in de container: localhost).
+// ValidIssuer (optioneel) = de issuer in het token (in de container: het publieke IP,
+// want de browser haalt het token daar). We accepteren beide, zodat metadata-ophalen lokaal
+// kan terwijl het token-issuer publiek is — geen NAT-hairpin nodig.
 var keycloakAuthority = builder.Configuration["Keycloak:Authority"];
+var keycloakValidIssuer = builder.Configuration["Keycloak:ValidIssuer"];
+var validIssuers = string.IsNullOrWhiteSpace(keycloakValidIssuer)
+    ? new[] { keycloakAuthority! }
+    : new[] { keycloakAuthority!, keycloakValidIssuer };
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -70,7 +78,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidIssuer = keycloakAuthority,
+            ValidIssuers = validIssuers,
             ValidateAudience = false, // Keycloak-tokens hebben standaard aud "account"
             NameClaimType = "preferred_username",
             RoleClaimType = ClaimTypes.Role,

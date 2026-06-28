@@ -44,12 +44,12 @@ De OIDC-authority en de Asterisk-host wijzen al naar de VM. CORS staat
 audio) én in Asterisk (`/usr/share/asterisk/sounds/custom`, speelt `sound:custom/...`).
 Hierop bouwen de TTS-prompts en eigen wachtmuziek voort.
 
-## Netwerk-/auth-notities (te valideren op de VM)
+## Netwerk-/auth-notities
 
-- De backend gebruikt `VmHost=20.107.0.204` zodat ARI/DB/Keycloak het publieke
-  adres gebruiken (de **token-issuer** is het publieke IP, want de browser haalt
-  het token daar). `extra_hosts: 20.107.0.204 → 127.0.0.1` laat die naam binnen de
-  container naar loopback wijzen, zodat de backend ze lokaal bereikt (geen NAT-hairpin).
-  Mocht token-validatie falen, controleer dan dit en de Keycloak-issuer.
+- De backend praat met Asterisk/Postgres/Keycloak via **localhost** (host-netwerk),
+  niet via het publieke IP — dat kan de VM zelf niet bereiken (geen NAT-hairpin), dus
+  géén `VmHost` in de container. Alleen de **token-issuer** is het publieke IP
+  (`Keycloak__ValidIssuer`), want de browser haalt het token daar; de backend haalt de
+  metadata/JWKS lokaal op en accepteert beide issuers.
 - Het sounds-pad `…/sounds/custom` voor `sound:custom/<naam>` even live verifiëren
   (Asterisk valt terug van de taalmap op de basismap).

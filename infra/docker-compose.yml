@@ -39,11 +39,11 @@ services:
     volumes:
       - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import/contactcenter-realm.json:ro
 
-  # Backend-API (.NET) op poort 5080, naast Asterisk/Postgres/Keycloak. Via network_mode
-  # host zijn die op localhost bereikbaar. extra_hosts laat de publieke VM-naam naar loopback
-  # wijzen: zo klopt de token-issuer (publiek IP, want de browser haalt het token daar) én
-  # bereikt de backend Keycloak/ARI/DB lokaal (geen NAT-hairpin nodig). VmHost zet ARI/DB/
-  # Keycloak op dat (publieke) adres. Vereist een NSG-regel voor TCP 5080 (front-ends → backend).
+  # Backend-API (.NET) op poort 5080, naast Asterisk/Postgres/Keycloak. Via network_mode host
+  # zijn die op localhost bereikbaar (de appsettings-defaults), dus géén VmHost hier — dat zou
+  # ARI/DB/Keycloak naar het publieke IP sturen dat de VM zelf niet kan bereiken. Alleen de
+  # token-issuer is het publieke IP (de browser haalt het token daar); de backend haalt de
+  # Keycloak-metadata lokaal op. Vereist een NSG-regel voor TCP 5080 (front-ends → backend).
   backend:
     build:
       context: ..
@@ -53,10 +53,8 @@ services:
     restart: unless-stopped
     depends_on:
       - postgres
-    extra_hosts:
-      - "20.107.0.204:127.0.0.1"
     environment:
-      VmHost: "20.107.0.204"
+      Keycloak__ValidIssuer: "http://20.107.0.204:8080/realms/contactcenter"
       Sounds__CustomDir: /var/lib/cc-sounds
     volumes:
       - cc-sounds:/var/lib/cc-sounds
