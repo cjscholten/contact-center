@@ -24,8 +24,9 @@ export interface QueueDetail {
   id: number;
   name: string;
   displayName: string;
-  welcomePrompt: string;
-  closedPrompt: string;
+  welcomeText: string;
+  closedText: string;
+  voice: string;
   adHocClosed: boolean;
   adHocForwardNumber: string | null;
   timeZone: string;
@@ -37,8 +38,9 @@ export interface QueueDetail {
 export interface QueueWriteRequest {
   name: string;
   displayName: string;
-  welcomePrompt: string;
-  closedPrompt: string;
+  welcomeText: string;
+  closedText: string;
+  voice: string;
   adHocClosed: boolean;
   adHocForwardNumber: string | null;
   timeZone: string;

@@ -2,6 +2,7 @@ using ContactCenter.Api.Ari;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
 using ContactCenter.Api.Realtime;
+using ContactCenter.Api.Tts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Tests;
@@ -121,5 +122,27 @@ public sealed class FakeAriClient : IAriClient
         var channelId = $"chan-{++_channelSeq}";
         Originates.Add((endpoint, appArgs, callerId, channelId));
         return Task.FromResult(channelId);
+    }
+}
+
+/// <summary>Vervangt Piper in de tests: registreert synthese-aanroepen en kan succes/fout simuleren.</summary>
+public sealed class FakeTtsService : ITtsService
+{
+    public bool Enabled { get; set; } = true;
+    public bool Succeed { get; set; } = true;
+    public List<(string Text, string Voice, string Output)> Calls { get; } = [];
+    private readonly HashSet<string> _existing = [];
+
+    public bool IsEnabled => Enabled;
+    public IReadOnlyList<string> AvailableVoices => ["nl_NL-pim-medium", "nl_NL-ronnie-medium"];
+    public string DefaultVoice => "nl_NL-pim-medium";
+    public bool OutputExists(string outputName) => _existing.Contains(outputName);
+
+    public Task<bool> SynthesizeAsync(string text, string voice, string outputName, CancellationToken ct = default)
+    {
+        Calls.Add((text, voice, outputName));
+        var ok = Enabled && Succeed;
+        if (ok) _existing.Add(outputName);
+        return Task.FromResult(ok);
     }
 }

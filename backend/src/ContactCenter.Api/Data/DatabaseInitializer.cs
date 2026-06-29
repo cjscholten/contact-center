@@ -1,3 +1,4 @@
+using ContactCenter.Api.Tts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.Data;
@@ -11,6 +12,7 @@ public static class DatabaseInitializer
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseInitializer");
         var dbFactory = services.GetRequiredService<IDbContextFactory<CcDbContext>>();
+        var tts = services.GetRequiredService<ITtsService>();
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -19,6 +21,7 @@ public static class DatabaseInitializer
                 await using var db = await dbFactory.CreateDbContextAsync();
                 await db.Database.MigrateAsync();
                 await SeedAsync(db, logger);
+                await RegeneratePromptsAsync(db, tts, logger);
                 logger.LogInformation("Database gemigreerd en gereed");
                 return;
             }
@@ -44,6 +47,8 @@ public static class DatabaseInitializer
             {
                 Name = "support",
                 DisplayName = "Support",
+                WelcomeText = "Welkom bij de klantenservice. Een moment geduld alstublieft, u wordt zo snel mogelijk geholpen.",
+                Voice = "nl_NL-pim-medium",
                 Numbers = [new InboundNumber { Number = "+19205008321" }],
                 OpeningHours = Enum.GetValues<DayOfWeek>()
                     .Select(day => new OpeningHoursWindow
@@ -98,5 +103,38 @@ public static class DatabaseInitializer
             await db.SaveChangesAsync();
             logger.LogInformation("Voorbeeldcontacten geseed");
         }
+    }
+
+    /// <summary>
+    /// Genereert ontbrekende TTS-prompts voor wachtrijen met een ingestelde tekst (bv. na een verse
+    /// sounds-volume of seed). Idempotent: bestaande bestanden worden hergebruikt. No-op zonder TTS.
+    /// </summary>
+    private static async Task RegeneratePromptsAsync(CcDbContext db, ITtsService tts, ILogger logger)
+    {
+        if (!tts.IsEnabled) return;
+
+        var queues = await db.Queues.ToListAsync();
+        var changed = 0;
+        foreach (var q in queues)
+        {
+            if (await EnsurePromptAsync(tts, q.WelcomeText, q.Voice, $"queue-{q.Name}-welcome") is { } w)
+            { q.WelcomePrompt = w; changed++; }
+            if (await EnsurePromptAsync(tts, q.ClosedText, q.Voice, $"queue-{q.Name}-closed") is { } c)
+            { q.ClosedPrompt = c; changed++; }
+        }
+        if (changed > 0)
+        {
+            await db.SaveChangesAsync();
+            logger.LogInformation("TTS: {Count} prompt(s) gegenereerd/gekoppeld bij opstart", changed);
+        }
+    }
+
+    /// <summary>Zorgt dat de prompt bestaat; geeft de "sound:custom/..."-referentie of null als er niets te doen valt.</summary>
+    private static async Task<string?> EnsurePromptAsync(ITtsService tts, string text, string voice, string outputName)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (tts.OutputExists(outputName) || await tts.SynthesizeAsync(text, voice, outputName))
+            return $"sound:custom/{outputName}";
+        return null;
     }
 }

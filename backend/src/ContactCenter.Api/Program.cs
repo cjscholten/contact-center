@@ -10,6 +10,7 @@ using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
 using ContactCenter.Api.Directory;
 using ContactCenter.Api.Realtime;
+using ContactCenter.Api.Tts;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -58,6 +59,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CallCoordinator>()
 builder.Services.AddSingleton<QueueDecisionService>();
 builder.Services.AddSingleton<DirectoryService>();
 builder.Services.AddSingleton<InboundCallHandler>();
+builder.Services.AddSingleton<ITtsService, PiperTtsService>();
 builder.Services.AddHostedService<AriEventListener>();
 
 // Keycloak (OIDC) — valideert de JWT's van ZetaDesk/ZetaBeheer. Dev: http (geen TLS).

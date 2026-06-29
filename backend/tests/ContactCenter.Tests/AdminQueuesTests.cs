@@ -13,8 +13,11 @@ public class AdminQueuesTests
         IReadOnlyList<string>? numbers = null,
         bool adHocClosed = false,
         string? forward = null,
-        string moh = "default")
-        => new(name, display, "sound:welcome", "sound:closed", adHocClosed, forward, "Europe/Amsterdam",
+        string moh = "default",
+        string welcomeText = "",
+        string closedText = "",
+        string voice = "nl_NL-pim-medium")
+        => new(name, display, welcomeText, closedText, voice, adHocClosed, forward, "Europe/Amsterdam",
             hours ?? [new OpeningHoursDto(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0))],
             numbers ?? ["+31201234599"], moh);
 
@@ -137,5 +140,56 @@ public class AdminQueuesTests
         Assert.Null(result!.Error);
         Assert.Equal("sales", result.Detail!.Name); // naam is read-only bij wijzigen
         Assert.Equal("Sales 2", result.Detail.DisplayName);
+    }
+
+    [Fact]
+    public async Task Create_met_welkomsttekst_synthetiseert_en_koppelt_de_prompt()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var tts = new FakeTtsService();
+
+        var result = await AdminApi.CreateQueueAsync(db,
+            Req(name: "sales", welcomeText: "Welkom bij sales.", voice: "nl_NL-ronnie-medium"), tts);
+
+        Assert.Null(result.Error);
+        Assert.Equal("Welkom bij sales.", result.Detail!.WelcomeText);
+        Assert.Equal("nl_NL-ronnie-medium", result.Detail.Voice);
+        var call = Assert.Single(tts.Calls);
+        Assert.Equal(("Welkom bij sales.", "nl_NL-ronnie-medium", "queue-sales-welcome"), call);
+
+        await using var verify = factory.CreateDbContext();
+        var saved = await verify.Queues.SingleAsync();
+        Assert.Equal("sound:custom/queue-sales-welcome", saved.WelcomePrompt);
+    }
+
+    [Fact]
+    public async Task Create_zonder_tekst_gebruikt_de_standaardprompt()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var tts = new FakeTtsService();
+
+        await AdminApi.CreateQueueAsync(db, Req(name: "sales"), tts);
+
+        Assert.Empty(tts.Calls); // geen synthese zonder tekst
+        await using var verify = factory.CreateDbContext();
+        var saved = await verify.Queues.SingleAsync();
+        Assert.Equal("sound:queue-thankyou", saved.WelcomePrompt);
+    }
+
+    [Fact]
+    public async Task Create_met_mislukte_tts_behoudt_de_bestaande_prompt()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var tts = new FakeTtsService { Succeed = false };
+
+        await AdminApi.CreateQueueAsync(db, Req(name: "sales", welcomeText: "Welkom."), tts);
+
+        await using var verify = factory.CreateDbContext();
+        var saved = await verify.Queues.SingleAsync();
+        Assert.Equal("Welkom.", saved.WelcomeText); // tekst wel opgeslagen
+        Assert.Equal("sound:queue-thankyou", saved.WelcomePrompt); // prompt onveranderd
     }
 }

@@ -44,6 +44,16 @@ De OIDC-authority en de Asterisk-host wijzen al naar de VM. CORS staat
 audio) én in Asterisk (`/usr/share/asterisk/sounds/custom`, speelt `sound:custom/...`).
 Hierop bouwen de TTS-prompts en eigen wachtmuziek voort.
 
+## TTS (Piper)
+
+De backend-image bundelt **Piper** (lokale neural-TTS) in `/opt/piper` met twee NL-stemmen
+(`nl_NL-pim-medium`, `nl_NL-ronnie-medium`) en `sox`. Bij het opslaan van een wachtrij in
+ZetaBeheer wordt een ingevulde welkomst-/gesloten-tekst gesynthetiseerd naar
+`cc-sounds/queue-<naam>-{welcome,closed}.wav` (8kHz mono) en als `sound:custom/...` afgespeeld;
+lege tekst valt terug op de standaard-Asterisk-prompt. Een extra stem toevoegen: het
+`.onnx`(+`.onnx.json`)-paar in `/opt/piper/voices` zetten (Dockerfile) en opnemen in `VOICES`
+in `frontend/admin/src/components/QueueEditorDrawer.tsx`.
+
 ## Netwerk-/auth-notities
 
 - De backend praat met Asterisk/Postgres/Keycloak via **localhost** (host-netwerk),

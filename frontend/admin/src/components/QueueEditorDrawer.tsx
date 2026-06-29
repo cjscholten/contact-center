@@ -10,6 +10,7 @@ import {
   Stack,
   Switch,
   Text,
+  Textarea,
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -37,8 +38,9 @@ interface Window {
 interface FormState {
   name: string;
   displayName: string;
-  welcomePrompt: string;
-  closedPrompt: string;
+  welcomeText: string;
+  closedText: string;
+  voice: string;
   timeZone: string;
   adHocClosed: boolean;
   adHocForwardNumber: string;
@@ -62,6 +64,12 @@ const TIMEZONES = ['Europe/Amsterdam', 'Europe/Brussels', 'Europe/London', 'UTC'
 // Moet overeenkomen met de klassen in musiconhold.conf op de Asterisk-host.
 const MOH_CLASSES = ['default', 'office'];
 
+// Moet overeenkomen met de gebundelde Piper-stemmen (infra/backend/Dockerfile).
+const VOICES = [
+  { value: 'nl_NL-pim-medium', label: 'Pim (Nederlands)' },
+  { value: 'nl_NL-ronnie-medium', label: 'Ronnie (Nederlands)' },
+];
+
 let seq = 0;
 const nextId = () => ++seq;
 
@@ -73,8 +81,9 @@ function defaultForm(): FormState {
   return {
     name: '',
     displayName: '',
-    welcomePrompt: 'sound:queue-thankyou',
-    closedPrompt: 'sound:vm-goodbye',
+    welcomeText: '',
+    closedText: '',
+    voice: 'nl_NL-pim-medium',
     timeZone: 'Europe/Amsterdam',
     adHocClosed: false,
     adHocForwardNumber: '',
@@ -88,8 +97,9 @@ function fromDetail(q: QueueDetail): FormState {
   return {
     name: q.name,
     displayName: q.displayName,
-    welcomePrompt: q.welcomePrompt,
-    closedPrompt: q.closedPrompt,
+    welcomeText: q.welcomeText,
+    closedText: q.closedText,
+    voice: q.voice,
     timeZone: q.timeZone,
     adHocClosed: q.adHocClosed,
     adHocForwardNumber: q.adHocForwardNumber ?? '',
@@ -135,8 +145,9 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
     const body: QueueWriteRequest = {
       name: form.name.trim(),
       displayName: form.displayName.trim(),
-      welcomePrompt: form.welcomePrompt.trim(),
-      closedPrompt: form.closedPrompt.trim(),
+      welcomeText: form.welcomeText.trim(),
+      closedText: form.closedText.trim(),
+      voice: form.voice,
       adHocClosed: form.adHocClosed,
       adHocForwardNumber: form.adHocForwardNumber.trim() || null,
       timeZone: form.timeZone,
@@ -161,6 +172,10 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
   };
 
   const tzData = form && !TIMEZONES.includes(form.timeZone) ? [form.timeZone, ...TIMEZONES] : TIMEZONES;
+  const voiceData =
+    form && !VOICES.some((v) => v.value === form.voice)
+      ? [{ value: form.voice, label: form.voice }, ...VOICES]
+      : VOICES;
 
   return (
     <Drawer
@@ -190,21 +205,30 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
             value={form.displayName}
             onChange={(e) => patch({ displayName: e.currentTarget.value })}
           />
+          <Textarea
+            label="Welkomsttekst (gesproken)"
+            description="Wordt met TTS naar spraak omgezet. Leeg = standaardprompt."
+            autosize
+            minRows={2}
+            value={form.welcomeText}
+            onChange={(e) => patch({ welcomeText: e.currentTarget.value })}
+          />
+          <Textarea
+            label="Gesloten-tekst (gesproken)"
+            description="Afgespeeld buiten openingstijden. Leeg = standaardprompt."
+            autosize
+            minRows={2}
+            value={form.closedText}
+            onChange={(e) => patch({ closedText: e.currentTarget.value })}
+          />
           <Group grow>
-            <TextInput
-              label="Welkomstprompt"
-              description="Asterisk media-URI"
-              value={form.welcomePrompt}
-              onChange={(e) => patch({ welcomePrompt: e.currentTarget.value })}
+            <Select
+              label="Stem"
+              description="Piper TTS-stem"
+              data={voiceData}
+              value={form.voice}
+              onChange={(v) => v && patch({ voice: v })}
             />
-            <TextInput
-              label="Gesloten-prompt"
-              description="Asterisk media-URI"
-              value={form.closedPrompt}
-              onChange={(e) => patch({ closedPrompt: e.currentTarget.value })}
-            />
-          </Group>
-          <Group grow>
             <Select
               label="Tijdzone"
               description="IANA-tijdzone voor de openingstijden"

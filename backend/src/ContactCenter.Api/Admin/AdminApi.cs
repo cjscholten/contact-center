@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
+using ContactCenter.Api.Tts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.Admin;
@@ -55,19 +56,19 @@ public static partial class AdminApi
             return q is null ? Results.NotFound() : Results.Ok(ToDetail(q));
         });
 
-        queues.MapPost("", async (QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        queues.MapPost("", async (QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, ITtsService tts, CancellationToken ct) =>
         {
             await using var db = await factory.CreateDbContextAsync(ct);
-            var result = await CreateQueueAsync(db, req, ct);
+            var result = await CreateQueueAsync(db, req, tts, ct);
             return result.Error is { } error
                 ? Results.BadRequest(new { error })
                 : Results.Created($"/api/admin/queues/{result.Detail!.Id}", result.Detail);
         });
 
-        queues.MapPut("/{id:int}", async (int id, QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        queues.MapPut("/{id:int}", async (int id, QueueWriteRequest req, IDbContextFactory<CcDbContext> factory, ITtsService tts, CancellationToken ct) =>
         {
             await using var db = await factory.CreateDbContextAsync(ct);
-            var result = await UpdateQueueAsync(db, id, req, ct);
+            var result = await UpdateQueueAsync(db, id, req, tts, ct);
             if (result is null) return Results.NotFound();
             return result.Error is { } error ? Results.BadRequest(new { error }) : Results.Ok(result.Detail);
         });
@@ -194,7 +195,7 @@ public static partial class AdminApi
 
     // --- Testbare kernlogica ---------------------------------------------------
 
-    public static async Task<QueueResult> CreateQueueAsync(CcDbContext db, QueueWriteRequest req, CancellationToken ct = default)
+    public static async Task<QueueResult> CreateQueueAsync(CcDbContext db, QueueWriteRequest req, ITtsService? tts = null, CancellationToken ct = default)
     {
         var name = req.Name.Trim();
         if (!QueueNameRegex().IsMatch(name))
@@ -207,13 +208,14 @@ public static partial class AdminApi
         var q = new QueueConfig { Name = name, DisplayName = req.DisplayName.Trim() };
         ApplyScalars(q, req);
         ReplaceChildren(q, req);
+        await ApplyTtsPromptsAsync(q, tts, ct);
         db.Queues.Add(q);
         await db.SaveChangesAsync(ct);
         return QueueResult.Ok(ToDetail(q));
     }
 
     /// <summary>Werkt een wachtrij bij. Geeft null bij onbekende id; Name is read-only bij wijzigen.</summary>
-    public static async Task<QueueResult?> UpdateQueueAsync(CcDbContext db, int id, QueueWriteRequest req, CancellationToken ct = default)
+    public static async Task<QueueResult?> UpdateQueueAsync(CcDbContext db, int id, QueueWriteRequest req, ITtsService? tts = null, CancellationToken ct = default)
     {
         var q = await db.Queues
             .Include(x => x.Numbers).Include(x => x.OpeningHours)
@@ -225,6 +227,7 @@ public static partial class AdminApi
         q.DisplayName = req.DisplayName.Trim();
         ApplyScalars(q, req);
         ReplaceChildren(q, req);
+        await ApplyTtsPromptsAsync(q, tts, ct);
         await db.SaveChangesAsync(ct);
         return QueueResult.Ok(ToDetail(q));
     }
@@ -389,8 +392,9 @@ public static partial class AdminApi
 
     private static void ApplyScalars(QueueConfig q, QueueWriteRequest req)
     {
-        q.WelcomePrompt = req.WelcomePrompt.Trim();
-        q.ClosedPrompt = req.ClosedPrompt.Trim();
+        q.WelcomeText = req.WelcomeText?.Trim() ?? "";
+        q.ClosedText = req.ClosedText?.Trim() ?? "";
+        q.Voice = string.IsNullOrWhiteSpace(req.Voice) ? "nl_NL-pim-medium" : req.Voice.Trim();
         q.TimeZone = req.TimeZone;
         q.AdHocClosed = req.AdHocClosed;
         q.AdHocForwardNumber = string.IsNullOrWhiteSpace(req.AdHocForwardNumber) ? null : req.AdHocForwardNumber.Trim();
@@ -408,8 +412,34 @@ public static partial class AdminApi
             q.Numbers.Add(new InboundNumber { Number = n });
     }
 
+    private const string DefaultWelcomePrompt = "sound:queue-thankyou";
+    private const string DefaultClosedPrompt = "sound:vm-goodbye";
+
+    /// <summary>
+    /// Zet de afgespeelde prompts op basis van de (optionele) TTS-teksten: tekst → Piper-synthese →
+    /// "sound:custom/...". Lege tekst valt terug op de standaardprompt; mislukte/uitgeschakelde TTS
+    /// laat de bestaande prompt staan, zodat opslaan nooit op een TTS-hapering strandt.
+    /// </summary>
+    private static async Task ApplyTtsPromptsAsync(QueueConfig q, ITtsService? tts, CancellationToken ct)
+    {
+        q.WelcomePrompt = await ResolvePromptAsync(
+            tts, q.WelcomeText, q.Voice, $"queue-{q.Name}-welcome", q.WelcomePrompt, DefaultWelcomePrompt, ct);
+        q.ClosedPrompt = await ResolvePromptAsync(
+            tts, q.ClosedText, q.Voice, $"queue-{q.Name}-closed", q.ClosedPrompt, DefaultClosedPrompt, ct);
+    }
+
+    private static async Task<string> ResolvePromptAsync(ITtsService? tts, string text, string voice,
+        string outputName, string current, string fallback, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return fallback;
+        if (tts is not null && await tts.SynthesizeAsync(text, voice, outputName, ct))
+            return $"sound:custom/{outputName}";
+        return current;
+    }
+
     private static QueueDetail ToDetail(QueueConfig q) => new(
-        q.Id, q.Name, q.DisplayName, q.WelcomePrompt, q.ClosedPrompt,
+        q.Id, q.Name, q.DisplayName, q.WelcomeText, q.ClosedText, q.Voice,
         q.AdHocClosed, q.AdHocForwardNumber, q.TimeZone,
         [.. q.OpeningHours.OrderBy(w => w.Day).ThenBy(w => w.Opens).Select(w => new OpeningHoursDto(w.Day, w.Opens, w.Closes))],
         [.. q.Numbers.OrderBy(n => n.Number).Select(n => n.Number)],
@@ -428,12 +458,12 @@ public sealed record QueueListItem(
 public sealed record OpeningHoursDto(DayOfWeek Day, TimeOnly Opens, TimeOnly Closes);
 
 public sealed record QueueDetail(
-    int Id, string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
+    int Id, string Name, string DisplayName, string WelcomeText, string ClosedText, string Voice,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
     IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
 
 public sealed record QueueWriteRequest(
-    string Name, string DisplayName, string WelcomePrompt, string ClosedPrompt,
+    string Name, string DisplayName, string WelcomeText, string ClosedText, string Voice,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
     IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
 
