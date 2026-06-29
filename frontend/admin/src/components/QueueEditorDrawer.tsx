@@ -68,6 +68,9 @@ const MOH_CLASSES = ['default', 'office'];
 const VOICES = [
   { value: 'nl_NL-pim-medium', label: 'Pim (Nederlands)' },
   { value: 'nl_NL-ronnie-medium', label: 'Ronnie (Nederlands)' },
+  { value: 'nl_NL-alex-medium', label: 'Alex (Nederlands)' },
+  { value: 'nl_BE-nathalie-medium', label: 'Nathalie (Vlaams)' },
+  { value: 'nl_BE-rdh-medium', label: 'RDH (Vlaams)' },
 ];
 
 let seq = 0;

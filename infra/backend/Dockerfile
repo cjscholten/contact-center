@@ -15,11 +15,20 @@ WORKDIR /opt/piper
 RUN curl -sSL https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
     | tar xz --strip-components=1
 RUN mkdir -p voices && cd voices \
-    && base=https://huggingface.co/rhasspy/piper-voices/resolve/main/nl/nl_NL \
-    && curl -sSL -o nl_NL-pim-medium.onnx        "$base/pim/medium/nl_NL-pim-medium.onnx" \
-    && curl -sSL -o nl_NL-pim-medium.onnx.json   "$base/pim/medium/nl_NL-pim-medium.onnx.json" \
-    && curl -sSL -o nl_NL-ronnie-medium.onnx      "$base/ronnie/medium/nl_NL-ronnie-medium.onnx" \
-    && curl -sSL -o nl_NL-ronnie-medium.onnx.json "$base/ronnie/medium/nl_NL-ronnie-medium.onnx.json"
+    && nl=https://huggingface.co/rhasspy/piper-voices/resolve/main/nl/nl_NL \
+    && be=https://huggingface.co/rhasspy/piper-voices/resolve/main/nl/nl_BE \
+    # Nederlands (nl_NL)
+    && curl -sSL -o nl_NL-pim-medium.onnx          "$nl/pim/medium/nl_NL-pim-medium.onnx" \
+    && curl -sSL -o nl_NL-pim-medium.onnx.json     "$nl/pim/medium/nl_NL-pim-medium.onnx.json" \
+    && curl -sSL -o nl_NL-ronnie-medium.onnx       "$nl/ronnie/medium/nl_NL-ronnie-medium.onnx" \
+    && curl -sSL -o nl_NL-ronnie-medium.onnx.json  "$nl/ronnie/medium/nl_NL-ronnie-medium.onnx.json" \
+    && curl -sSL -o nl_NL-alex-medium.onnx         "$nl/alex/medium/nl_NL-alex-medium.onnx" \
+    && curl -sSL -o nl_NL-alex-medium.onnx.json    "$nl/alex/medium/nl_NL-alex-medium.onnx.json" \
+    # Vlaams / Belgisch-Nederlands (nl_BE)
+    && curl -sSL -o nl_BE-nathalie-medium.onnx     "$be/nathalie/medium/nl_BE-nathalie-medium.onnx" \
+    && curl -sSL -o nl_BE-nathalie-medium.onnx.json "$be/nathalie/medium/nl_BE-nathalie-medium.onnx.json" \
+    && curl -sSL -o nl_BE-rdh-medium.onnx          "$be/rdh/medium/nl_BE-rdh-medium.onnx" \
+    && curl -sSL -o nl_BE-rdh-medium.onnx.json     "$be/rdh/medium/nl_BE-rdh-medium.onnx.json"
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 # sox hersamplet de piper-output naar 8kHz mono; libgomp1 voor onnxruntime.
