@@ -4,6 +4,7 @@ using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.Data;
 using ContactCenter.Api.Realtime;
+using ContactCenter.Api.Tts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Api.CallFlow;
@@ -20,6 +21,11 @@ public sealed class CallCoordinator : IHostedService
 
     private const string ForwardContext = "cc-forward";
 
+    // Positie-meldingen: per positienummer één (gecachet) TTS-bestand, afgespeeld op het
+    // beller-kanaal in de holding-brug (onderbreekt de wachtmuziek kort, hervat daarna).
+    private const string PositionOutputPrefix = "queue-position-";
+    private const int MaxAnnouncedPosition = 20; // verder achteraan: geen melding (cache niet eindeloos laten groeien)
+
     // App-arg waarmee een door de backend gebelde leg zichzelf identificeert bij StasisStart:
     // "agent" = leg die met de beller verbonden wordt, "consult" = overlegleg (warm doorverbinden).
     private const string AgentAppArg = "agent";
@@ -29,6 +35,8 @@ public sealed class CallCoordinator : IHostedService
     private readonly AgentStateService _agents;
     private readonly IDbContextFactory<CcDbContext> _dbFactory;
     private readonly IRealtimeNotifier _notifier;
+    private readonly ITtsService _tts;
+    private readonly int _announceSeconds;
     private readonly ILogger<CallCoordinator> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -43,14 +51,18 @@ public sealed class CallCoordinator : IHostedService
         Channel.CreateBounded<byte>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private CancellationTokenSource? _pumpCts;
     private Task? _pumpTask;
+    private Task? _announceTask;
 
     public CallCoordinator(IAriClient ari, AgentStateService agents,
-        IDbContextFactory<CcDbContext> dbFactory, IRealtimeNotifier notifier, ILogger<CallCoordinator> logger)
+        IDbContextFactory<CcDbContext> dbFactory, IRealtimeNotifier notifier, ITtsService tts,
+        IConfiguration config, ILogger<CallCoordinator> logger)
     {
         _ari = ari;
         _agents = agents;
         _dbFactory = dbFactory;
         _notifier = notifier;
+        _tts = tts;
+        _announceSeconds = config.GetValue("Queue:PositionAnnounceSeconds", 30);
         _logger = logger;
         _agents.RequestDispatch = SignalDispatch;
     }
@@ -719,6 +731,80 @@ public sealed class CallCoordinator : IHostedService
             await NotifyQueuesAsync(snapshot, ct);
     }
 
+    // --- Positie-meldingen ----------------------------------------------------
+
+    private async Task AnnouncePumpAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_announceSeconds));
+            while (await timer.WaitForNextTickAsync(ct))
+                await AnnouncePositionsAsync(ct);
+        }
+        catch (OperationCanceledException) { /* afsluiten */ }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Positie-aankondiger gestopt door onverwachte fout");
+        }
+    }
+
+    /// <summary>
+    /// Vertelt elke wachtende beller zijn huidige positie in de eigen wachtrij (oudste = 1). De
+    /// melding wordt per positienummer eenmalig via Piper gegenereerd en gecachet; bij uitgeschakelde
+    /// of falende TTS gebeurt er niets (de wachtmuziek blijft ongemoeid).
+    /// </summary>
+    internal async Task AnnouncePositionsAsync(CancellationToken ct = default)
+    {
+        if (!_tts.IsEnabled)
+            return;
+
+        // Snapshot onder de lock: bepaal de positie per beller; afspelen gebeurt erbuiten zodat
+        // de dispatch-pomp niet blokkeert.
+        List<(string ChannelId, int Position)> targets;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var perQueue = new Dictionary<string, int>(StringComparer.Ordinal);
+            targets = [];
+            foreach (var caller in _waiting) // invoegvolgorde = wachtvolgorde
+            {
+                var pos = perQueue.GetValueOrDefault(caller.QueueName) + 1;
+                perQueue[caller.QueueName] = pos;
+                targets.Add((caller.ChannelId, pos));
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        foreach (var (channelId, position) in targets)
+            await AnnouncePositionAsync(channelId, position, ct);
+    }
+
+    private async Task AnnouncePositionAsync(string channelId, int position, CancellationToken ct)
+    {
+        if (position > MaxAnnouncedPosition)
+            return;
+
+        var outputName = $"{PositionOutputPrefix}{position}";
+        if (!_tts.OutputExists(outputName))
+        {
+            var text = $"U bent nummer {position} in de wachtrij. Een moment geduld alstublieft.";
+            if (!await _tts.SynthesizeAsync(text, _tts.DefaultVoice, outputName, ct))
+                return; // synthese mislukt: laat de wachtmuziek ongemoeid
+        }
+
+        try
+        {
+            await _ari.PlayAsync(channelId, $"sound:custom/{outputName}", ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Positie-melding voor {Channel} afspelen faalde: {Reden}", channelId, ex.Message);
+        }
+    }
+
     // --- Hulpfuncties ---------------------------------------------------------
 
     /// <summary>
@@ -798,6 +884,10 @@ public sealed class CallCoordinator : IHostedService
     {
         _pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _pumpTask = DispatchPumpAsync(_pumpCts.Token);
+        if (_announceSeconds > 0)
+            _announceTask = AnnouncePumpAsync(_pumpCts.Token);
+        else
+            _logger.LogInformation("Positie-meldingen uitgeschakeld (Queue:PositionAnnounceSeconds = 0)");
         return Task.CompletedTask;
     }
 
@@ -806,7 +896,8 @@ public sealed class CallCoordinator : IHostedService
         _dispatchSignals.Writer.TryComplete();
         if (_pumpCts is not null)
             await _pumpCts.CancelAsync();
-        if (_pumpTask is not null)
-            await Task.WhenAny(_pumpTask, Task.Delay(Timeout.Infinite, cancellationToken));
+        var pending = new[] { _pumpTask, _announceTask }.Where(t => t is not null).Cast<Task>().ToArray();
+        if (pending.Length > 0)
+            await Task.WhenAny(Task.WhenAll(pending), Task.Delay(Timeout.Infinite, cancellationToken));
     }
 }

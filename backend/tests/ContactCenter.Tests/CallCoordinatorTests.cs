@@ -1,14 +1,26 @@
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.CallFlow;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ContactCenter.Tests;
 
 public class CallCoordinatorTests
 {
+    // Leeg config → positie-meldingen op default-interval; in unit-tests roepen we de
+    // aankondiger rechtstreeks aan (de timer-pomp start alleen via StartAsync).
+    private static IConfiguration EmptyConfig => new ConfigurationBuilder().Build();
+
     private static (CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents) Build(
         int wrapUpSeconds, params (string name, string[] queues)[] agents)
+    {
+        var (coordinator, ari, agentSvc, _) = BuildWithTts(wrapUpSeconds, agents);
+        return (coordinator, ari, agentSvc);
+    }
+
+    private static (CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents, FakeTtsService tts)
+        BuildWithTts(int wrapUpSeconds, params (string name, string[] queues)[] agents)
     {
         if (agents.Length == 0)
             agents = [("agent1001", ["support"])];
@@ -16,9 +28,11 @@ public class CallCoordinatorTests
         factory.Seed(wrapUpSeconds, agents);
         var agentSvc = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
         var ari = new FakeAriClient();
+        var tts = new FakeTtsService();
         var coordinator = new CallCoordinator(
-            ari, agentSvc, factory, new FakeRealtimeNotifier(), NullLogger<CallCoordinator>.Instance);
-        return (coordinator, ari, agentSvc);
+            ari, agentSvc, factory, new FakeRealtimeNotifier(), tts, EmptyConfig,
+            NullLogger<CallCoordinator>.Instance);
+        return (coordinator, ari, agentSvc, tts);
     }
 
     [Fact]
@@ -452,11 +466,71 @@ public class CallCoordinatorTests
         var ari = new FakeAriClient();
         var agents = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
         var coordinator = new CallCoordinator(
-            ari, agents, factory, new FakeRealtimeNotifier(), NullLogger<CallCoordinator>.Instance);
+            ari, agents, factory, new FakeRealtimeNotifier(), new FakeTtsService(), EmptyConfig,
+            NullLogger<CallCoordinator>.Instance);
 
         await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000000");
 
         var holding = ari.BridgeTypes.First(b => b.Value == "holding").Key;
         Assert.Contains((holding, "office"), ari.MohStartedWithClass);
+    }
+
+    // --- Positie-meldingen ----------------------------------------------------
+
+    [Fact]
+    public async Task Positie_meldingen_vertellen_elke_wachtende_zijn_plek()
+    {
+        var (coordinator, ari, _, tts) = BuildWithTts(wrapUpSeconds: 0); // niemand ingelogd → bellers blijven wachten
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000001");
+        await coordinator.EnqueueCallerAsync("caller-2", "support", "+31600000002");
+
+        await coordinator.AnnouncePositionsAsync();
+
+        // positie 1 en 2 gegenereerd en op het juiste kanaal afgespeeld
+        Assert.Contains(tts.Calls, c => c.Output == "queue-position-1");
+        Assert.Contains(tts.Calls, c => c.Output == "queue-position-2");
+        Assert.Contains(("caller-1", "sound:custom/queue-position-1"), ari.Plays);
+        Assert.Contains(("caller-2", "sound:custom/queue-position-2"), ari.Plays);
+    }
+
+    [Fact]
+    public async Task Positie_wordt_per_wachtrij_geteld()
+    {
+        var (coordinator, ari, _, _) =
+            BuildWithTts(wrapUpSeconds: 0, ("agent1001", ["support"]), ("agent1002", ["sales"]));
+        // niemand ingelogd → alle bellers wachten
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000001");
+        await coordinator.EnqueueCallerAsync("caller-2", "sales", "+31600000002");
+
+        await coordinator.AnnouncePositionsAsync();
+
+        // elke beller is de eerste in zijn eigen wachtrij
+        Assert.Contains(("caller-1", "sound:custom/queue-position-1"), ari.Plays);
+        Assert.Contains(("caller-2", "sound:custom/queue-position-1"), ari.Plays);
+    }
+
+    [Fact]
+    public async Task Gegenereerde_positie_melding_wordt_hergebruikt_niet_opnieuw_gesynthetiseerd()
+    {
+        var (coordinator, _, _, tts) = BuildWithTts(wrapUpSeconds: 0);
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000001");
+
+        await coordinator.AnnouncePositionsAsync();
+        await coordinator.AnnouncePositionsAsync();
+
+        Assert.Single(tts.Calls, c => c.Output == "queue-position-1"); // één keer gesynthetiseerd
+    }
+
+    [Fact]
+    public async Task Zonder_TTS_geen_positie_meldingen()
+    {
+        var (coordinator, ari, _, tts) = BuildWithTts(wrapUpSeconds: 0);
+        tts.Enabled = false;
+        await coordinator.EnqueueCallerAsync("caller-1", "support", "+31600000001");
+
+        await coordinator.AnnouncePositionsAsync();
+
+        Assert.Empty(ari.Plays);
+        Assert.Empty(tts.Calls);
     }
 }

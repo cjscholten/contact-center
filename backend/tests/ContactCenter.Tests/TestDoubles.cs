@@ -64,13 +64,17 @@ public sealed class FakeAriClient : IAriClient
     public List<string> MohStarted = [];
     public List<(string Bridge, string Class)> MohStartedWithClass = [];
     public List<(string Channel, string Context, string Extension)> Continued = [];
+    public List<(string Channel, string Media)> Plays = [];
 
     private int _bridgeSeq;
     private int _channelSeq;
 
     public Task AnswerAsync(string channelId, CancellationToken ct = default) => Task.CompletedTask;
     public Task<string> PlayAsync(string channelId, string media, CancellationToken ct = default)
-        => Task.FromResult("playback-1");
+    {
+        Plays.Add((channelId, media));
+        return Task.FromResult($"playback-{Plays.Count}");
+    }
     public Task ContinueInDialplanAsync(string channelId, string context, string extension, int priority,
         CancellationToken ct = default)
     {
