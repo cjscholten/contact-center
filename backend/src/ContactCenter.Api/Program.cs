@@ -20,6 +20,11 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Lokale secrets buiten git: appsettings.Local.json (gitignored, zie .example) wordt geladen als
+// het bestaat — in élke omgeving, dus ook bij 'dotnet run' (default Production). In de container
+// ontbreekt dit bestand en komen de secrets uit env-variabelen (docker-compose → infra/.env).
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+
 // Dev-gemak: één parameter (--VmHost=x.x.x.x) wijst ARI, de database en
 // Keycloak naar de VM; de rest komt uit appsettings.json.
 var vmHost = builder.Configuration["VmHost"];

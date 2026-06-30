@@ -16,15 +16,36 @@ Inbound toestaan: **5060/udp**, **8088**, **10000-10100/udp** (telefonie),
 **5432** (db, dev), **8080** (Keycloak), **5080** (backend). De trunk-leg vanaf de
 SBC loopt via `AllowVnetInBound`.
 
-## Starten
+## Secrets (`infra/.env`)
+
+De stack-secrets staan **niet in git**. Maak eenmalig per omgeving een `infra/.env`
+op basis van het sjabloon en vul echte waarden in (productie: geen `changeme-dev`):
 
 ```bash
 # op de VM, in deze map
+cp .env.example .env
+# bewerk .env: POSTGRES_PASSWORD, KEYCLOAK_ADMIN_PASSWORD, ARI_PASSWORD
+```
+
+`docker compose` leest `infra/.env` automatisch. Ontbreekt het bestand of een variabele,
+dan stopt `compose up` met een duidelijke melding (de `${VAR:?…}`-bewaking). `ARI_PASSWORD`
+moet voorlopig gelijk zijn aan het wachtwoord in `asterisk/conf/ari.conf` (die is nog statisch).
+
+Lokaal de backend draaien (`dotnet run`): kopieer
+`backend/src/ContactCenter.Api/appsettings.Local.json.example` naar
+`appsettings.Local.json` (ook gitignored) — Program.cs laadt dat in elke omgeving.
+
+## Starten
+
+```bash
+# op de VM, in deze map (vereist infra/.env, zie hierboven)
 docker compose up -d --build
 ```
 
 De backend past bij het opstarten de EF-migraties toe en seedt de database.
-`docker compose logs -f backend` om mee te kijken.
+`docker compose logs -f backend` om mee te kijken. De DB-connectionstring en het
+ARI-wachtwoord komen via env uit `infra/.env`; `appsettings.json` bevat alleen
+secret-loze defaults.
 
 ## Front-ends (lokaal, dev)
 

@@ -19,7 +19,8 @@ services:
     environment:
       POSTGRES_DB: contactcenter
       POSTGRES_USER: cc
-      POSTGRES_PASSWORD: changeme-dev
+      # Secret uit infra/.env (zie infra/.env.example). Ontbreekt die, dan stopt compose met deze melding.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -34,7 +35,7 @@ services:
     restart: unless-stopped
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: changeme-dev
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
       KC_HOSTNAME_STRICT: "false"
     volumes:
       # Alle realm-JSON's in de import-map worden bij --import-realm geladen: de default-tenant
@@ -58,6 +59,10 @@ services:
     depends_on:
       - postgres
     environment:
+      # Secrets uit infra/.env: de DB-connectionstring en het ARI-wachtwoord komen niet meer
+      # uit appsettings.json (daar staan alleen secret-loze defaults). Env overschrijft die.
+      ConnectionStrings__ContactCenter: "Host=localhost;Port=5432;Database=contactcenter;Username=cc;Password=${POSTGRES_PASSWORD}"
+      Ari__Password: ${ARI_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
       # Multi-tenant: de backend haalt de JWKS per realm op bij deze basis-URL (lokaal, via
       # network_mode host). De token-issuer mag een ander (publiek) IP zijn — die wordt op
       # realm-lidmaatschap gevalideerd, niet op exacte host.
