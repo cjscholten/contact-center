@@ -1,20 +1,26 @@
 import { useEffect, useState } from 'react';
-import { AppShell, Burger, Button, Center, Group, Loader, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AppShell, Burger, Button, Group, NavLink, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconAddressBook,
   IconHeadset,
-  IconLogin,
   IconLogout,
   IconPhoneCall,
   IconSettings,
 } from '@tabler/icons-react';
 import { useAuth } from 'react-oidc-context';
+import {
+  AccessDeniedScreen,
+  AuthErrorScreen,
+  LoadingScreen,
+  LoginScreen,
+  realmRolesFromToken,
+  setAccessToken,
+} from '@zeta/ui';
 import { QueuesPage } from './components/QueuesPage';
 import { AgentsPage } from './components/AgentsPage';
 import { ContactsPage } from './components/ContactsPage';
 import { SettingsPage } from './components/SettingsPage';
-import { realmRolesFromToken, setAccessToken } from './auth/token';
 
 type Section = 'queues' | 'agents' | 'contacts' | 'settings';
 
@@ -24,14 +30,6 @@ const NAV: { key: Section; label: string; icon: typeof IconPhoneCall }[] = [
   { key: 'contacts', label: 'Contacten', icon: IconAddressBook },
   { key: 'settings', label: 'Instellingen', icon: IconSettings },
 ];
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <Center mih="100vh" p="md">
-      {children}
-    </Center>
-  );
-}
 
 export default function App() {
   const auth = useAuth();
@@ -46,42 +44,20 @@ export default function App() {
   };
 
   if (auth.isLoading) {
-    return <Centered><Loader /></Centered>;
+    return <LoadingScreen />;
   }
   if (auth.error) {
-    return (
-      <Centered>
-        <Stack align="center">
-          <Title order={4}>Aanmelden mislukt</Title>
-          <Text c="dimmed" size="sm">{auth.error.message}</Text>
-          <Button onClick={() => void auth.signinRedirect()}>Opnieuw proberen</Button>
-        </Stack>
-      </Centered>
-    );
+    return <AuthErrorScreen message={auth.error.message} onRetry={() => void auth.signinRedirect()} />;
   }
   if (!auth.isAuthenticated) {
-    return (
-      <Centered>
-        <Stack align="center">
-          <Title order={2}>ZetaBeheer</Title>
-          <Button size="md" leftSection={<IconLogin size={18} />} onClick={() => void auth.signinRedirect()}>
-            Aanmelden met Keycloak
-          </Button>
-        </Stack>
-      </Centered>
-    );
+    return <LoginScreen appName="ZetaBeheer" onLogin={() => void auth.signinRedirect()} />;
   }
   if (!realmRolesFromToken(auth.user?.access_token).includes('admin')) {
     return (
-      <Centered>
-        <Stack align="center">
-          <Title order={3}>Geen toegang</Title>
-          <Text c="dimmed" size="sm">Je account heeft de rol 'admin' nodig voor de beheeromgeving.</Text>
-          <Button variant="default" leftSection={<IconLogout size={16} />} onClick={logout}>
-            Afmelden
-          </Button>
-        </Stack>
-      </Centered>
+      <AccessDeniedScreen
+        message="Je account heeft de rol 'admin' nodig voor de beheeromgeving."
+        onLogout={logout}
+      />
     );
   }
 

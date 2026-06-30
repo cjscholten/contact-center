@@ -1,5 +1,5 @@
 import { apiBase } from '../config';
-import { authHeader } from '../auth/token';
+import { authHeader } from '@zeta/ui';
 
 export type DayOfWeek =
   | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';

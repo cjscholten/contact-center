@@ -1,26 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Center, Loader, Stack, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconLogin } from '@tabler/icons-react';
 import { useAuth } from 'react-oidc-context';
+import { AuthErrorScreen, LoadingScreen, LoginScreen, setAccessToken } from '@zeta/ui';
 import { useSoftphone } from './softphone/useSoftphone';
 import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
 import { agentApi, type DirectoryEntry, type Presence } from './api/agentApi';
 import { asteriskHost } from './config';
-import { setAccessToken } from './auth/token';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
 
 function fail(title: string, e: unknown): void {
   notifications.show({ color: 'red', title, message: e instanceof Error ? e.message : String(e) });
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <Center mih="100vh" p="md">
-      {children}
-    </Center>
-  );
 }
 
 export default function App() {
@@ -171,31 +161,13 @@ export default function App() {
 
   let content: React.ReactNode;
   if (auth.isLoading) {
-    content = <Loader />;
+    content = <LoadingScreen />;
   } else if (auth.error) {
-    content = (
-      <Stack align="center">
-        <Title order={4}>Aanmelden mislukt</Title>
-        <Text c="dimmed" size="sm">{auth.error.message}</Text>
-        <Button onClick={() => void auth.signinRedirect()}>Opnieuw proberen</Button>
-      </Stack>
-    );
+    content = <AuthErrorScreen message={auth.error.message} onRetry={() => void auth.signinRedirect()} />;
   } else if (!auth.isAuthenticated) {
-    content = (
-      <Stack align="center">
-        <Title order={2}>ZetaDesk</Title>
-        <Button size="md" leftSection={<IconLogin size={18} />} onClick={() => void auth.signinRedirect()}>
-          Aanmelden met Keycloak
-        </Button>
-      </Stack>
-    );
+    content = <LoginScreen appName="ZetaDesk" onLogin={() => void auth.signinRedirect()} />;
   } else if (!agentName) {
-    content = (
-      <Stack align="center">
-        <Loader />
-        <Text c="dimmed">Verbinden…</Text>
-      </Stack>
-    );
+    content = <LoadingScreen message="Verbinden…" />;
   } else {
     content = (
       <ZetaDeskShell
@@ -226,7 +198,7 @@ export default function App() {
   return (
     <>
       <audio ref={audioRef} autoPlay />
-      {agentName ? content : <Centered>{content}</Centered>}
+      {content}
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { type HubConnection, HubConnectionBuilder } from '@microsoft/signalr';
 import { apiBase } from '../config';
-import { authHeader, getAccessToken } from '../auth/token';
+import { authHeader, getAccessToken } from '@zeta/ui';
 
 export interface WaitingCall {
   callId: string;
