@@ -1,5 +1,4 @@
 {
-  "_comment": "Tweede voorbeeld-tenant (slug 'acme') voor multi-tenant end-to-end testen. Lokale users zodat testen zonder Entra kan; de Entra-IdP kan later via provision-tenant.sh toegevoegd worden. Dev-clients wijzen naar dezelfde localhost-poorten als de default-realm (5173/5174).",
   "realm": "tenant-acme",
   "enabled": true,
   "sslRequired": "none",

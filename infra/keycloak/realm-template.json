@@ -1,5 +1,4 @@
 {
-  "_comment": "Sjabloon voor een klant-realm. provision-tenant.sh vervangt de __PLACEHOLDERS__ en importeert het via kcadm. Per klant één realm met een eigen Microsoft Entra ID als gekoppelde identity provider (alias 'entra'). Lokale users zijn optioneel (bootstrap/test); in productie komen de gebruikers via Entra.",
   "realm": "__REALM__",
   "enabled": true,
   "sslRequired": "none",
