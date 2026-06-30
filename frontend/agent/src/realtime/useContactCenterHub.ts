@@ -18,10 +18,7 @@ export function useContactCenterHub(enabled: boolean): { waiting: WaitingCall[] 
   const [waiting, setWaiting] = useState<WaitingCall[]>([]);
 
   useEffect(() => {
-    if (!enabled) {
-      setWaiting([]);
-      return;
-    }
+    if (!enabled) return;
     let connection: HubConnection | undefined;
     let cancelled = false;
 
@@ -51,5 +48,6 @@ export function useContactCenterHub(enabled: boolean): { waiting: WaitingCall[] 
     };
   }, [enabled]);
 
-  return { waiting };
+  // Uitgeschakeld: lege lijst teruggeven i.p.v. de state via setState in het effect te wissen.
+  return { waiting: enabled ? waiting : [] };
 }

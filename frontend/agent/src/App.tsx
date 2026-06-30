@@ -30,12 +30,16 @@ export default function App() {
   }, [auth.user]);
 
   // Wachtstand en overleg resetten zodra het gesprek eindigt (o.a. na voltooien van een overleg).
-  useEffect(() => {
+  // Tijdens render bijwerken op basis van de vorige callState i.p.v. via een effect — dat is het
+  // aanbevolen patroon voor afgeleide state en voorkomt een extra render-cyclus.
+  const [prevCallState, setPrevCallState] = useState(sp.callState);
+  if (sp.callState !== prevCallState) {
+    setPrevCallState(sp.callState);
     if (sp.callState === 'idle') {
       setOnHold(false);
       setConsultWith(null);
     }
-  }, [sp.callState]);
+  }
 
   // Na Keycloak-login: SIP-gegevens ophalen, softphone registreren, backend-login. Eénmalig per sessie.
   useEffect(() => {

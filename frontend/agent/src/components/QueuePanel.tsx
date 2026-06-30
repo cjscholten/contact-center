@@ -27,7 +27,7 @@ interface Props {
 }
 
 export function QueuePanel({ waiting, canPickup, onPickup }: Props) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);

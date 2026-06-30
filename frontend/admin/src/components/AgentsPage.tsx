@@ -34,7 +34,9 @@ export function AgentsPage() {
   }, []);
 
   useEffect(() => {
-    void reload();
+    void (async () => {
+      await reload();
+    })();
   }, [reload]);
 
   const openEdit = async (id: number) => {

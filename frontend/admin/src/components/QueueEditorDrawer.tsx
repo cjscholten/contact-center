@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   ActionIcon,
   Button,
@@ -122,10 +122,15 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const isNew = target === 'new';
 
-  useEffect(() => {
-    if (target === null) return;
-    setForm(target === 'new' ? defaultForm() : fromDetail(target));
-  }, [target]);
+  // Formulier (re)initialiseren zodra een ander target geopend wordt — tijdens render op basis van
+  // het vorige target i.p.v. via een effect (voorkomt cascading renders).
+  const [prevTarget, setPrevTarget] = useState(target);
+  if (target !== prevTarget) {
+    setPrevTarget(target);
+    if (target !== null) {
+      setForm(target === 'new' ? defaultForm() : fromDetail(target));
+    }
+  }
 
   const patch = (p: Partial<FormState>) => setForm((f) => (f ? { ...f, ...p } : f));
 
