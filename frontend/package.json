@@ -1,0 +1,17 @@
+{
+  "name": "contact-center-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "agent",
+    "admin"
+  ],
+  "scripts": {
+    "dev:agent": "npm -w agent run dev",
+    "dev:admin": "npm -w admin run dev",
+    "build": "npm -w @zeta/ui run build --if-present && npm -w agent run build && npm -w admin run build",
+    "lint": "npm -w agent run lint && npm -w admin run lint"
+  }
+}

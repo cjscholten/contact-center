@@ -6,10 +6,7 @@ export function useAgentSnapshot(agentName: string | null): AgentSnapshot | null
   const [snapshot, setSnapshot] = useState<AgentSnapshot | null>(null);
 
   useEffect(() => {
-    if (!agentName) {
-      setSnapshot(null);
-      return;
-    }
+    if (!agentName) return;
     let active = true;
     const poll = async () => {
       try {
@@ -27,5 +24,7 @@ export function useAgentSnapshot(agentName: string | null): AgentSnapshot | null
     };
   }, [agentName]);
 
-  return snapshot;
+  // Zonder agent geen snapshot tonen; de (mogelijk verouderde) state wordt afgedekt door de
+  // afgeleide return i.p.v. via een setState in het effect (voorkomt cascading renders).
+  return agentName ? snapshot : null;
 }

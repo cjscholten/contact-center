@@ -14,6 +14,10 @@ dist/
 # Omgevingsspecifiek (publiek IP van de Asterisk-VM)
 vm-ip.txt
 
+# Secrets — nooit in git; gebruik de bijbehorende *.example als sjabloon
+infra/.env
+**/appsettings.Local.json
+
 # Diversen
 .DS_Store
 *.log

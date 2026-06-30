@@ -1,0 +1,9 @@
+{
+  "_comment": "Kopieer dit naar appsettings.Local.json (gitignored) om de backend lokaal te draaien. Program.cs laadt het in elke omgeving als het bestaat en vult zo de secret-loze defaults uit appsettings.json aan. De Host wordt door --VmHost alsnog herschreven; alleen het wachtwoord telt hier.",
+  "ConnectionStrings": {
+    "ContactCenter": "Host=localhost;Port=5432;Database=contactcenter;Username=cc;Password=changeme-dev"
+  },
+  "Ari": {
+    "Password": "changeme-dev"
+  }
+}

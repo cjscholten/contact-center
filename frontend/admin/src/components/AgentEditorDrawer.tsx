@@ -32,21 +32,41 @@ export function AgentEditorDrawer({ target, onClose, onSaved }: Props) {
   const [endpointDirty, setEndpointDirty] = useState(false);
   const isNew = target === 'new';
 
+  // Formulier (re)initialiseren zodra een ander target geopend wordt — tijdens render op basis van
+  // het vorige target i.p.v. via een effect (voorkomt cascading renders).
+  const [prevTarget, setPrevTarget] = useState(target);
+  if (target !== prevTarget) {
+    setPrevTarget(target);
+    if (target !== null) {
+      const creating = target === 'new';
+      setEndpointDirty(!creating); // bij bewerken endpoint niet automatisch overschrijven
+      setForm(
+        creating
+          ? { name: '', displayName: '', endpoint: '', queueIds: [] }
+          : {
+              name: target.name,
+              displayName: target.displayName,
+              endpoint: target.endpoint,
+              queueIds: target.queueIds.map(String),
+            },
+      );
+    }
+  }
+
   useEffect(() => {
     if (target === null) return;
-    const creating = target === 'new';
-    setEndpointDirty(!creating); // bij bewerken endpoint niet automatisch overschrijven
-    setForm(
-      creating
-        ? { name: '', displayName: '', endpoint: '', queueIds: [] }
-        : {
-            name: target.name,
-            displayName: target.displayName,
-            endpoint: target.endpoint,
-            queueIds: target.queueIds.map(String),
-          },
-    );
-    adminApi.listQueues().then(setQueues).catch(() => setQueues([]));
+    let active = true;
+    adminApi
+      .listQueues()
+      .then((q) => {
+        if (active) setQueues(q);
+      })
+      .catch(() => {
+        if (active) setQueues([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [target]);
 
   const patch = (p: Partial<FormState>) => setForm((f) => (f ? { ...f, ...p } : f));

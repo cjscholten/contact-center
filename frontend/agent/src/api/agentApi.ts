@@ -1,5 +1,5 @@
 import { apiBase } from '../config';
-import { authHeader } from '../auth/token';
+import { authHeader } from '@zeta/ui';
 
 export type AgentStatus = 'LoggedOut' | 'Available' | 'Ringing' | 'OnCall' | 'WrapUp';
 export type Presence = 'Available' | 'Break' | 'Unavailable';
