@@ -4,7 +4,10 @@ public class QueueConfig
 {
     public int Id { get; set; }
 
-    /// <summary>Technische naam; moet overeenkomen met de wachtrij in queues.conf ([a-z0-9]).</summary>
+    /// <summary>Eigenaar (klant) van deze wachtrij. Zie <see cref="Tenant"/>.</summary>
+    public int TenantId { get; set; }
+
+    /// <summary>Technische naam ([a-z0-9]); uniek binnen de tenant.</summary>
     public required string Name { get; set; }
 
     public required string DisplayName { get; set; }

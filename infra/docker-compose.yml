@@ -37,7 +37,11 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: changeme-dev
       KC_HOSTNAME_STRICT: "false"
     volumes:
+      # Alle realm-JSON's in de import-map worden bij --import-realm geladen: de default-tenant
+      # (contactcenter) en de voorbeeld-tenant (tenant-acme). Extra klant-realms voeg je toe met
+      # keycloak/provision-tenant.sh (geen herstart nodig).
       - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import/contactcenter-realm.json:ro
+      - ./keycloak/tenant-acme-realm.json:/opt/keycloak/data/import/tenant-acme-realm.json:ro
 
   # Backend-API (.NET) op poort 5080, naast Asterisk/Postgres/Keycloak. Via network_mode host
   # zijn die op localhost bereikbaar (de appsettings-defaults), dus géén VmHost hier — dat zou
@@ -54,7 +58,10 @@ services:
     depends_on:
       - postgres
     environment:
-      Keycloak__ValidIssuer: "http://20.107.0.204:8080/realms/contactcenter"
+      # Multi-tenant: de backend haalt de JWKS per realm op bij deze basis-URL (lokaal, via
+      # network_mode host). De token-issuer mag een ander (publiek) IP zijn — die wordt op
+      # realm-lidmaatschap gevalideerd, niet op exacte host.
+      Keycloak__BaseUrl: "http://localhost:8080"
       Sounds__CustomDir: /var/lib/cc-sounds
     volumes:
       - cc-sounds:/var/lib/cc-sounds

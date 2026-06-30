@@ -1,0 +1,67 @@
+{
+  "realm": "__REALM__",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginTheme": "keycloak",
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "agent", "description": "Contactcenter-agent (ZetaDesk)" },
+      { "name": "admin", "description": "Beheerder (ZetaBeheer)" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "zetadesk",
+      "name": "ZetaDesk (agent-app)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["__ZETADESK_REDIRECT__"],
+      "webOrigins": ["__ZETADESK_ORIGIN__"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "__ZETADESK_REDIRECT__"
+      }
+    },
+    {
+      "clientId": "zetabeheer",
+      "name": "ZetaBeheer (admin-app)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["__ZETABEHEER_REDIRECT__"],
+      "webOrigins": ["__ZETABEHEER_ORIGIN__"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "__ZETABEHEER_REDIRECT__"
+      }
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "entra",
+      "displayName": "Microsoft Entra ID",
+      "providerId": "oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "__ENTRA_CLIENT_ID__",
+        "clientSecret": "__ENTRA_CLIENT_SECRET__",
+        "clientAuthMethod": "client_secret_post",
+        "issuer": "https://login.microsoftonline.com/__ENTRA_TENANT_ID__/v2.0",
+        "authorizationUrl": "https://login.microsoftonline.com/__ENTRA_TENANT_ID__/oauth2/v2.0/authorize",
+        "tokenUrl": "https://login.microsoftonline.com/__ENTRA_TENANT_ID__/oauth2/v2.0/token",
+        "jwksUrl": "https://login.microsoftonline.com/__ENTRA_TENANT_ID__/discovery/v2.0/keys",
+        "userInfoUrl": "https://graph.microsoft.com/oidc/userinfo",
+        "useJwksUrl": "true",
+        "defaultScope": "openid profile email",
+        "syncMode": "FORCE"
+      }
+    }
+  ]
+}

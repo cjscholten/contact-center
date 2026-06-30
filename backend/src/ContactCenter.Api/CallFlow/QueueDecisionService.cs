@@ -13,7 +13,7 @@ public sealed class QueueDecisionService
                 : new ForwardTo(queue.AdHocForwardNumber);
 
         return IsOpen(queue, utcNow)
-            ? new RouteToQueue(queue.Name, queue.WelcomePrompt)
+            ? new RouteToQueue(queue.TenantId, queue.Name, queue.WelcomePrompt)
             : new PlayAndHangup(queue.ClosedPrompt);
     }
 

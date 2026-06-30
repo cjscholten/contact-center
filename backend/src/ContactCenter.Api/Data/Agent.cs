@@ -4,7 +4,10 @@ public class Agent
 {
     public int Id { get; set; }
 
-    /// <summary>Loginnaam; gelijk aan de SIP-gebruikersnaam zolang er geen IdP-koppeling is.</summary>
+    /// <summary>Eigenaar (klant) van deze agent. Zie <see cref="Tenant"/>.</summary>
+    public int TenantId { get; set; }
+
+    /// <summary>Loginnaam (uniek binnen de tenant); gelijk aan de SIP-gebruikersnaam zolang er geen IdP-koppeling is.</summary>
     public required string Name { get; set; }
 
     public required string DisplayName { get; set; }

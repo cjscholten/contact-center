@@ -1,0 +1,66 @@
+{
+  "realm": "tenant-acme",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginTheme": "keycloak",
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "agent", "description": "Contactcenter-agent (ZetaDesk)" },
+      { "name": "admin", "description": "Beheerder (ZetaBeheer)" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "zetadesk",
+      "name": "ZetaDesk (agent-app)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      }
+    },
+    {
+      "clientId": "zetabeheer",
+      "name": "ZetaBeheer (admin-app)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:5174/*"],
+      "webOrigins": ["http://localhost:5174"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5174/*"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "agent2001",
+      "email": "agent2001@acme.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Acme",
+      "lastName": "Agent 2001",
+      "credentials": [{ "type": "password", "value": "changeme-dev", "temporary": false }],
+      "realmRoles": ["agent"]
+    },
+    {
+      "username": "beheerder",
+      "email": "beheerder@acme.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Acme",
+      "lastName": "Beheer",
+      "credentials": [{ "type": "password", "value": "changeme-dev", "temporary": false }],
+      "realmRoles": ["admin"]
+    }
+  ]
+}

@@ -26,7 +26,7 @@ var vmHost = builder.Configuration["VmHost"];
 if (!string.IsNullOrWhiteSpace(vmHost))
 {
     builder.Configuration["Ari:BaseUrl"] = $"http://{vmHost}:8088/ari/";
-    builder.Configuration["Keycloak:Authority"] = $"http://{vmHost}:8080/realms/contactcenter";
+    builder.Configuration["Keycloak:BaseUrl"] = $"http://{vmHost}:8080";
 }
 
 builder.Services.AddOptions<AriOptions>()
@@ -63,24 +63,41 @@ builder.Services.AddSingleton<ITtsService, PiperTtsService>();
 builder.Services.AddHostedService<AriEventListener>();
 
 // Keycloak (OIDC) — valideert de JWT's van ZetaDesk/ZetaBeheer. Dev: http (geen TLS).
-// Authority = waar de backend de metadata/JWKS ophaalt (in de container: localhost).
-// ValidIssuer (optioneel) = de issuer in het token (in de container: het publieke IP,
-// want de browser haalt het token daar). We accepteren beide, zodat metadata-ophalen lokaal
-// kan terwijl het token-issuer publiek is — geen NAT-hairpin nodig.
-var keycloakAuthority = builder.Configuration["Keycloak:Authority"];
-var keycloakValidIssuer = builder.Configuration["Keycloak:ValidIssuer"];
-var validIssuers = string.IsNullOrWhiteSpace(keycloakValidIssuer)
-    ? new[] { keycloakAuthority! }
-    : new[] { keycloakAuthority!, keycloakValidIssuer };
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+// Multi-tenant: elke klant heeft een eigen realm; de issuer in het token bepaalt de realm en
+// daarmee de tenant. De backend haalt de JWKS per realm dynamisch op bij Keycloak:BaseUrl
+// (in de container: localhost), terwijl de token-issuer het publieke IP kan zijn — de issuer
+// wordt op realm-lidmaatschap gevalideerd (via de tenant-registry), niet op exacte host, dus
+// de NAT-hairpin is vanzelf afgedekt.
+var keycloakOptions = new KeycloakOptions
+{
+    BaseUrl = builder.Configuration["Keycloak:BaseUrl"] ?? "http://localhost:8080",
+};
+builder.Services.AddSingleton(keycloakOptions);
+builder.Services.AddSingleton<KeycloakRealmKeys>();
+builder.Services.AddSingleton<ITenantAccessor, TenantAccessor>();
+builder.Services.AddSingleton<ITenantRegistry, TenantRegistry>();
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<KeycloakRealmKeys, ITenantRegistry>((options, keys, registry) =>
     {
-        options.Authority = keycloakAuthority;
         options.RequireHttpsMetadata = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidIssuers = validIssuers,
+            IssuerValidator = (issuer, _, _) =>
+            {
+                var realm = KeycloakRealmKeys.RealmFromIssuer(issuer);
+                if (realm is not null && registry.TryGetByRealm(realm, out _))
+                    return issuer;
+                throw new SecurityTokenInvalidIssuerException($"Onbekende realm voor issuer '{issuer}'.");
+            },
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKeyResolver = (_, securityToken, _, _) =>
+            {
+                var realm = KeycloakRealmKeys.RealmFromIssuer(securityToken.Issuer);
+                return realm is null ? [] : keys.SigningKeys(realm);
+            },
             ValidateAudience = false, // Keycloak-tokens hebben standaard aud "account"
             NameClaimType = "preferred_username",
             RoleClaimType = ClaimTypes.Role,
@@ -116,6 +133,7 @@ var app = builder.Build();
 
 app.UseCors();
 app.UseAuthentication();
+app.UseMiddleware<TenantMiddleware>(); // herleidt de tenant uit de token-issuer (realm)
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
@@ -134,8 +152,8 @@ agents.AddEndpointFilter(async (ctx, next) =>
     return await next(ctx);
 });
 
-agents.MapGet("", async (AgentStateService svc, CancellationToken ct)
-    => Results.Ok(await svc.GetAllAsync(ct)));
+agents.MapGet("", async (AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+    => Results.Ok(await svc.GetAllAsync(tenant.TenantId!.Value, ct)));
 
 // Het SIP-wachtwoord voor de ingelogde agent (afgeleid van het token), voor de softphone-registratie.
 agents.MapGet("/me/sip", async (HttpContext http, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
@@ -143,61 +161,62 @@ agents.MapGet("/me/sip", async (HttpContext http, IDbContextFactory<CcDbContext>
     var username = http.User.Identity?.Name;
     if (string.IsNullOrEmpty(username)) return Results.Unauthorized();
     await using var db = await factory.CreateDbContextAsync(ct);
+    // tenant-gescoped via de query-filter (tenant-context staat na de middleware).
     var agent = await db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Name == username, ct);
     return agent is null
         ? Results.NotFound()
         : Results.Ok(new { username = agent.Name, password = agent.SipPassword });
 });
 
-agents.MapGet("/{name}", async (string name, AgentStateService svc, CancellationToken ct)
-    => await svc.GetAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
+agents.MapGet("/{name}", async (string name, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+    => await svc.GetAsync(tenant.TenantId!.Value, name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
-agents.MapPost("/{name}/login", async (string name, AgentStateService svc, CancellationToken ct)
-    => await svc.LoginAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
+agents.MapPost("/{name}/login", async (string name, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+    => await svc.LoginAsync(tenant.TenantId!.Value, name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
-agents.MapPost("/{name}/logout", async (string name, AgentStateService svc, CancellationToken ct)
-    => await svc.LogoutAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
+agents.MapPost("/{name}/logout", async (string name, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+    => await svc.LogoutAsync(tenant.TenantId!.Value, name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
-agents.MapPost("/{name}/wrapup/finish", async (string name, AgentStateService svc, CancellationToken ct)
-    => await svc.FinishWrapUpAsync(name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
+agents.MapPost("/{name}/wrapup/finish", async (string name, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+    => await svc.FinishWrapUpAsync(tenant.TenantId!.Value, name, ct) is { } snapshot ? Results.Ok(snapshot) : Results.NotFound());
 
 agents.MapPost("/{name}/presence",
-    async (string name, PresenceRequest req, AgentStateService svc, CancellationToken ct)
-        => await svc.SetPresenceAsync(name, req.Presence, ct) is { } snapshot
+    async (string name, PresenceRequest req, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)
+        => await svc.SetPresenceAsync(tenant.TenantId!.Value, name, req.Presence, ct) is { } snapshot
             ? Results.Ok(snapshot)
             : Results.NotFound());
 
 // Handmatig een specifiek wachtend gesprek aannemen. 409 als het al weg is of de agent bezet is.
 agents.MapPost("/{name}/calls/{callId}/pickup",
-    async (string name, string callId, CallCoordinator calls, CancellationToken ct)
-        => await calls.PickupAsync(name, callId, ct) ? Results.Ok() : Results.Conflict());
+    async (string name, string callId, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.PickupAsync(tenant.TenantId!.Value, name, callId, ct) ? Results.Ok() : Results.Conflict());
 
-agents.MapPost("/{name}/hold", async (string name, CallCoordinator calls, CancellationToken ct)
-    => await calls.HoldAsync(name, ct) ? Results.Ok(new { onHold = true }) : Results.NotFound());
+agents.MapPost("/{name}/hold", async (string name, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+    => await calls.HoldAsync(tenant.TenantId!.Value, name, ct) ? Results.Ok(new { onHold = true }) : Results.NotFound());
 
-agents.MapPost("/{name}/unhold", async (string name, CallCoordinator calls, CancellationToken ct)
-    => await calls.UnholdAsync(name, ct) ? Results.Ok(new { onHold = false }) : Results.NotFound());
+agents.MapPost("/{name}/unhold", async (string name, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+    => await calls.UnholdAsync(tenant.TenantId!.Value, name, ct) ? Results.Ok(new { onHold = false }) : Results.NotFound());
 
 agents.MapPost("/{name}/transfer/cold",
-    async (string name, TransferRequest req, CallCoordinator calls, CancellationToken ct)
-        => await calls.ColdTransferAsync(name, req.Target, ct) ? Results.Ok() : Results.NotFound());
+    async (string name, TransferRequest req, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.ColdTransferAsync(tenant.TenantId!.Value, name, req.Target, ct) ? Results.Ok() : Results.NotFound());
 
 agents.MapPost("/{name}/transfer/agent",
-    async (string name, AgentTransferRequest req, CallCoordinator calls, CancellationToken ct)
-        => await calls.TransferToAgentAsync(name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
+    async (string name, AgentTransferRequest req, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.TransferToAgentAsync(tenant.TenantId!.Value, name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
 
 // Warm doorverbinden (overleg): starten met een collega, daarna voltooien of annuleren.
 agents.MapPost("/{name}/transfer/warm",
-    async (string name, AgentTransferRequest req, CallCoordinator calls, CancellationToken ct)
-        => await calls.StartWarmTransferAsync(name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
+    async (string name, AgentTransferRequest req, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.StartWarmTransferAsync(tenant.TenantId!.Value, name, req.Agent, ct) ? Results.Ok() : Results.Conflict());
 
 agents.MapPost("/{name}/transfer/warm/complete",
-    async (string name, CallCoordinator calls, CancellationToken ct)
-        => await calls.CompleteWarmTransferAsync(name, ct) ? Results.Ok() : Results.Conflict());
+    async (string name, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.CompleteWarmTransferAsync(tenant.TenantId!.Value, name, ct) ? Results.Ok() : Results.Conflict());
 
 agents.MapPost("/{name}/transfer/warm/cancel",
-    async (string name, CallCoordinator calls, CancellationToken ct)
-        => await calls.CancelWarmTransferAsync(name, ct) ? Results.Ok() : Results.Conflict());
+    async (string name, CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+        => await calls.CancelWarmTransferAsync(tenant.TenantId!.Value, name, ct) ? Results.Ok() : Results.Conflict());
 
 // Zoeken naar doorverbind-bestemmingen (collega-agents + contacten).
 app.MapGet("/api/directory/search",
@@ -205,8 +224,8 @@ app.MapGet("/api/directory/search",
         => Results.Ok(await directory.SearchAsync(q, exclude, ct))).RequireAuthorization();
 
 // Wachtrij-overzicht: initiële stand; live updates lopen via de SignalR-hub.
-app.MapGet("/api/queues", async (CallCoordinator calls, CancellationToken ct)
-    => Results.Ok(await calls.GetWaitingViewAsync(ct))).RequireAuthorization();
+app.MapGet("/api/queues", async (CallCoordinator calls, ITenantAccessor tenant, CancellationToken ct)
+    => Results.Ok(await calls.GetWaitingViewAsync(tenant.TenantId!.Value, ct))).RequireAuthorization();
 
 // Beheer-API (ZetaBeheer): CRUD op de configuratie — vereist de rol 'admin' (zie AdminApi).
 app.MapAdminApi();
@@ -214,6 +233,7 @@ app.MapAdminApi();
 app.MapHub<ContactCenterHub>("/hub").RequireAuthorization();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
+await app.Services.GetRequiredService<ITenantRegistry>().ReloadAsync();
 
 app.Run();
 

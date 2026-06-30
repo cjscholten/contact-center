@@ -21,8 +21,10 @@ public sealed class InboundCallHandler(
     private const string ForwardContext = "cc-forward";
     private const string UnknownNumberPrompt = "sound:ss-noservice";
 
-    // Terugval als de database onbereikbaar is: telefonie blijft werken.
-    private static readonly RouteToQueue FallbackAction = new("support", "sound:queue-thankyou");
+    // Terugval als de database onbereikbaar is: telefonie blijft werken. Tenant onbekend (geen DB),
+    // dus de eerste/standaard-tenant (id 1, als eerste geseed) — alleen relevant als de DB plat ligt.
+    private const int FallbackTenantId = 1;
+    private static readonly RouteToQueue FallbackAction = new(FallbackTenantId, "support", "sound:queue-thankyou");
 
     private readonly ConcurrentDictionary<string, PendingAction> _afterPlayback = new();
 
@@ -64,7 +66,8 @@ public sealed class InboundCallHandler(
         switch (pending.Action)
         {
             case RouteToQueue route:
-                await coordinator.EnqueueCallerAsync(pending.ChannelId, route.QueueName, pending.CallerId, ct);
+                await coordinator.EnqueueCallerAsync(
+                    pending.ChannelId, route.TenantId, route.QueueName, pending.CallerId, ct);
                 break;
             case PlayAndHangup:
                 logger.LogInformation("Kanaal {ChannelId} opgehangen na melding", pending.ChannelId);
@@ -92,7 +95,9 @@ public sealed class InboundCallHandler(
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var queue = await db.Queues.AsNoTracking()
+            // De inbound-pomp draait zonder tenant-context; de tenant volgt uit het gebelde
+            // nummer (DID → wachtrij → tenant), dus de tenant-query-filter bewust bypassen.
+            var queue = await db.Queues.AsNoTracking().IgnoreQueryFilters()
                 .Include(q => q.OpeningHours)
                 .Where(q => q.Numbers.Any(n => n.Number == dialed))
                 .FirstOrDefaultAsync(ct);
