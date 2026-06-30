@@ -205,7 +205,7 @@ public static partial class AdminApi
         if (await ValidateAsync(db, req, queueId: null, ct) is { } error)
             return QueueResult.Fail(error);
 
-        var q = new QueueConfig { Name = name, DisplayName = req.DisplayName.Trim() };
+        var q = new QueueConfig { TenantId = db.CurrentTenantId, Name = name, DisplayName = req.DisplayName.Trim() };
         ApplyScalars(q, req);
         ReplaceChildren(q, req);
         await ApplyTtsPromptsAsync(q, tts, ct);
@@ -244,7 +244,7 @@ public static partial class AdminApi
         if (await ValidateAgentAsync(db, req, ct) is { } error)
             return AgentResult.Fail(error);
 
-        var agent = new Agent { Name = name, DisplayName = req.DisplayName.Trim(), Endpoint = req.Endpoint.Trim() };
+        var agent = new Agent { TenantId = db.CurrentTenantId, Name = name, DisplayName = req.DisplayName.Trim(), Endpoint = req.Endpoint.Trim() };
         ApplyAgentQueues(agent, req.QueueIds);
         db.Agents.Add(agent);
         await db.SaveChangesAsync(ct);
@@ -302,6 +302,7 @@ public static partial class AdminApi
             return ContactResult.Fail(error);
         var c = new Contact
         {
+            TenantId = db.CurrentTenantId,
             Name = req.Name.Trim(),
             Number = req.Number.Trim(),
             Department = string.IsNullOrWhiteSpace(req.Department) ? null : req.Department.Trim(),
@@ -346,7 +347,7 @@ public static partial class AdminApi
         var s = await db.Settings.FirstOrDefaultAsync(ct);
         if (s is null)
         {
-            s = new GlobalSettings();
+            s = new GlobalSettings { TenantId = db.CurrentTenantId };
             db.Settings.Add(s);
         }
         s.WrapUpSeconds = req.WrapUpSeconds;

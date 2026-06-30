@@ -1,4 +1,5 @@
 using ContactCenter.Api.Ari;
+using ContactCenter.Api.Auth;
 using ContactCenter.Api.CallFlow;
 using ContactCenter.Api.Data;
 using ContactCenter.Api.Realtime;
@@ -7,16 +8,22 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Tests;
 
-/// <summary>Vangt de wachtrij-pushes op zodat tests ze kunnen inspecteren.</summary>
+/// <summary>Vangt de wachtrij-pushes (per tenant) op zodat tests ze kunnen inspecteren.</summary>
 public sealed class FakeRealtimeNotifier : IRealtimeNotifier
 {
-    public List<IReadOnlyList<WaitingCallView>> QueuePushes { get; } = [];
+    public List<(int TenantId, IReadOnlyList<WaitingCallView> Waiting)> QueuePushes { get; } = [];
 
-    public Task QueuesChangedAsync(IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
+    public Task QueuesChangedAsync(int tenantId, IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
     {
-        QueuePushes.Add(waiting);
+        QueuePushes.Add((tenantId, waiting));
         return Task.CompletedTask;
     }
+}
+
+/// <summary>Tenant-accessor voor tests; standaard tenant 0 (gelijk aan de default-TenantId van geseede data).</summary>
+public sealed class TestTenantAccessor : ITenantAccessor
+{
+    public int? TenantId { get; set; } = 0;
 }
 
 /// <summary>In-memory DbContext-factory met seed-helpers voor de tests.</summary>
@@ -27,7 +34,10 @@ public sealed class TestDbContextFactory : IDbContextFactory<CcDbContext>
             .UseInMemoryDatabase($"cc-test-{Guid.NewGuid()}")
             .Options;
 
-    public CcDbContext CreateDbContext() => new(_options);
+    /// <summary>De tenant-context die de gemaakte DbContexts gebruiken (default 0).</summary>
+    public TestTenantAccessor Tenant { get; } = new();
+
+    public CcDbContext CreateDbContext() => new(_options, Tenant);
 
     public void Seed(int wrapUpSeconds, params (string name, string[] queues)[] agents)
     {

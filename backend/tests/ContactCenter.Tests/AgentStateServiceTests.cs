@@ -5,6 +5,10 @@ namespace ContactCenter.Tests;
 
 public class AgentStateServiceTests
 {
+    private const int T = 0; // testtenant (gelijk aan de default-TenantId van geseede data)
+
+    private static string Q(string queue) => AgentStateService.QueueKey(T, queue);
+
     private static AgentStateService Build(TestDbContextFactory factory)
         => new(factory, NullLogger<AgentStateService>.Instance);
 
@@ -14,9 +18,9 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
 
-        var reserved = await sut.TryReserveForCallAsync(["support"]);
+        var reserved = await sut.TryReserveForCallAsync([Q("support")]);
 
         Assert.NotNull(reserved);
         Assert.Equal("agent1001", reserved!.Name);
@@ -29,12 +33,12 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]), ("agent1002", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.LoginAsync("agent1002");
+        await sut.LoginAsync(T, "agent1001");
+        await sut.LoginAsync(T, "agent1002");
 
-        var first = await sut.TryReserveForCallAsync(["support"]);
-        var second = await sut.TryReserveForCallAsync(["support"]);
-        var third = await sut.TryReserveForCallAsync(["support"]);
+        var first = await sut.TryReserveForCallAsync([Q("support")]);
+        var second = await sut.TryReserveForCallAsync([Q("support")]);
+        var third = await sut.TryReserveForCallAsync([Q("support")]);
 
         Assert.NotNull(first);
         Assert.NotNull(second);
@@ -48,9 +52,9 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
 
-        Assert.Null(await sut.TryReserveForCallAsync(["sales"]));
+        Assert.Null(await sut.TryReserveForCallAsync([Q("sales")]));
     }
 
     [Fact]
@@ -59,13 +63,13 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 30, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
 
-        await sut.BeginWrapUpAsync("agent1001");
-        var snapshot = await sut.GetAsync("agent1001");
+        await sut.BeginWrapUpAsync(T, "agent1001");
+        var snapshot = await sut.GetAsync(T, "agent1001");
 
         Assert.Equal(AgentStatus.WrapUp, snapshot!.Status);
-        Assert.Null(await sut.TryReserveForCallAsync(["support"]));
+        Assert.Null(await sut.TryReserveForCallAsync([Q("support")]));
     }
 
     [Fact]
@@ -74,13 +78,13 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 30, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.BeginWrapUpAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
+        await sut.BeginWrapUpAsync(T, "agent1001");
 
-        var snapshot = await sut.FinishWrapUpAsync("agent1001");
+        var snapshot = await sut.FinishWrapUpAsync(T, "agent1001");
 
         Assert.Equal(AgentStatus.Available, snapshot!.Status);
-        Assert.NotNull(await sut.TryReserveForCallAsync(["support"]));
+        Assert.NotNull(await sut.TryReserveForCallAsync([Q("support")]));
     }
 
     [Fact]
@@ -89,10 +93,10 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
 
-        await sut.BeginWrapUpAsync("agent1001");
-        var snapshot = await sut.GetAsync("agent1001");
+        await sut.BeginWrapUpAsync(T, "agent1001");
+        var snapshot = await sut.GetAsync(T, "agent1001");
 
         Assert.Equal(AgentStatus.Available, snapshot!.Status);
     }
@@ -103,10 +107,10 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.LogoutAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
+        await sut.LogoutAsync(T, "agent1001");
 
-        Assert.Null(await sut.TryReserveForCallAsync(["support"]));
+        Assert.Null(await sut.TryReserveForCallAsync([Q("support")]));
     }
 
     [Fact]
@@ -115,11 +119,11 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
+        await sut.LoginAsync(T, "agent1001");
 
-        await sut.SetPresenceAsync("agent1001", Presence.Break);
+        await sut.SetPresenceAsync(T, "agent1001", Presence.Break);
 
-        Assert.Null(await sut.TryReserveForCallAsync(["support"]));
+        Assert.Null(await sut.TryReserveForCallAsync([Q("support")]));
     }
 
     [Fact]
@@ -128,11 +132,11 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.SetPresenceAsync("agent1001", Presence.Unavailable);
-        await sut.SetPresenceAsync("agent1001", Presence.Available);
+        await sut.LoginAsync(T, "agent1001");
+        await sut.SetPresenceAsync(T, "agent1001", Presence.Unavailable);
+        await sut.SetPresenceAsync(T, "agent1001", Presence.Available);
 
-        Assert.NotNull(await sut.TryReserveForCallAsync(["support"]));
+        Assert.NotNull(await sut.TryReserveForCallAsync([Q("support")]));
     }
 
     [Fact]
@@ -141,10 +145,10 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.SetPresenceAsync("agent1001", Presence.Break);
+        await sut.LoginAsync(T, "agent1001");
+        await sut.SetPresenceAsync(T, "agent1001", Presence.Break);
 
-        Assert.NotNull(await sut.TryReserveSpecificAsync("agent1001"));
+        Assert.NotNull(await sut.TryReserveSpecificAsync(T, "agent1001"));
     }
 
     [Fact]
@@ -153,10 +157,10 @@ public class AgentStateServiceTests
         var factory = new TestDbContextFactory();
         factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
         var sut = Build(factory);
-        await sut.LoginAsync("agent1001");
-        await sut.TryReserveSpecificAsync("agent1001"); // → Ringing
-        await sut.ConfirmOnCallAsync("agent1001"); // → OnCall
+        await sut.LoginAsync(T, "agent1001");
+        await sut.TryReserveSpecificAsync(T, "agent1001"); // → Ringing
+        await sut.ConfirmOnCallAsync(T, "agent1001"); // → OnCall
 
-        Assert.Null(await sut.TryReserveSpecificAsync("agent1001"));
+        Assert.Null(await sut.TryReserveSpecificAsync(T, "agent1001"));
     }
 }

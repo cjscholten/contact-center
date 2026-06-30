@@ -39,38 +39,58 @@ public static class DatabaseInitializer
         }
     }
 
+    // De seed draait zonder tenant-context, dus de tenant-query-filter zou alles wegfilteren:
+    // overal IgnoreQueryFilters() en TenantId expliciet zetten.
     private static async Task SeedAsync(CcDbContext db, ILogger logger)
     {
-        if (!await db.Queues.AnyAsync())
+        var defaultTenant = await EnsureTenantAsync(db, "default", "Standaard", "contactcenter", logger);
+        var acmeTenant = await EnsureTenantAsync(db, "acme", "Acme BV", "tenant-acme", logger);
+
+        await SeedDefaultTenantAsync(db, defaultTenant.Id, logger);
+        await SeedAcmeTenantAsync(db, acmeTenant.Id, logger);
+    }
+
+    private static async Task<Tenant> EnsureTenantAsync(
+        CcDbContext db, string slug, string displayName, string realm, ILogger logger)
+    {
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Slug == slug);
+        if (tenant is null)
+        {
+            tenant = new Tenant { Slug = slug, DisplayName = displayName, Realm = realm };
+            db.Tenants.Add(tenant);
+            await db.SaveChangesAsync();
+            logger.LogInformation("Tenant '{Slug}' geseed (realm '{Realm}')", slug, realm);
+        }
+        return tenant;
+    }
+
+    private static async Task SeedDefaultTenantAsync(CcDbContext db, int tenantId, ILogger logger)
+    {
+        if (!await db.Queues.IgnoreQueryFilters().AnyAsync(q => q.TenantId == tenantId))
         {
             var support = new QueueConfig
             {
+                TenantId = tenantId,
                 Name = "support",
                 DisplayName = "Support",
                 WelcomeText = "Welkom bij de klantenservice. Een moment geduld alstublieft, u wordt zo snel mogelijk geholpen.",
                 Voice = "nl_NL-pim-medium",
                 Numbers = [new InboundNumber { Number = "+19205008321" }],
-                OpeningHours = Enum.GetValues<DayOfWeek>()
-                    .Select(day => new OpeningHoursWindow
-                    {
-                        Day = day,
-                        Opens = new TimeOnly(0, 0),
-                        Closes = new TimeOnly(23, 59, 59),
-                    })
-                    .ToList(),
+                OpeningHours = AllDayOpeningHours(),
             };
-
             db.Queues.Add(support);
             await db.SaveChangesAsync();
-            logger.LogInformation("Wachtrij 'support' geseed met nummer +19205008321 (24/7 open)");
+            logger.LogInformation("Wachtrij 'support' geseed (tenant default) met nummer +19205008321 (24/7 open)");
         }
 
-        if (!await db.Agents.AnyAsync())
+        if (!await db.Agents.IgnoreQueryFilters().AnyAsync(a => a.TenantId == tenantId))
         {
-            var queueIds = await db.Queues.ToDictionaryAsync(q => q.Name, q => q.Id);
+            var queueIds = await db.Queues.IgnoreQueryFilters()
+                .Where(q => q.TenantId == tenantId).ToDictionaryAsync(q => q.Name, q => q.Id);
             db.Agents.AddRange(
                 new Agent
                 {
+                    TenantId = tenantId,
                     Name = "agent1001",
                     DisplayName = "Agent 1001",
                     Endpoint = "PJSIP/agent1001",
@@ -78,32 +98,87 @@ public static class DatabaseInitializer
                 },
                 new Agent
                 {
+                    TenantId = tenantId,
                     Name = "agent1002",
                     DisplayName = "Agent 1002",
                     Endpoint = "PJSIP/agent1002",
                     QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueIds["support"] }],
                 });
             await db.SaveChangesAsync();
-            logger.LogInformation("Agents 'agent1001' en 'agent1002' geseed");
+            logger.LogInformation("Agents 'agent1001' en 'agent1002' geseed (tenant default)");
         }
 
-        if (!await db.Settings.AnyAsync())
-        {
-            db.Settings.Add(new GlobalSettings { WrapUpSeconds = 30 });
-            await db.SaveChangesAsync();
-            logger.LogInformation("Globale instellingen geseed (nawerktijd: 30s)");
-        }
+        await EnsureSettingsAsync(db, tenantId, logger);
 
-        if (!await db.Contacts.AnyAsync())
+        if (!await db.Contacts.IgnoreQueryFilters().AnyAsync(c => c.TenantId == tenantId))
         {
             db.Contacts.AddRange(
-                new Contact { Name = "Receptie", Number = "+31201234500", Department = "Kantoor" },
-                new Contact { Name = "Helpdesk tweede lijn", Number = "+31201234510", Department = "Support" },
-                new Contact { Name = "Boekhouding", Number = "+31201234520", Department = "Finance" });
+                new Contact { TenantId = tenantId, Name = "Receptie", Number = "+31201234500", Department = "Kantoor" },
+                new Contact { TenantId = tenantId, Name = "Helpdesk tweede lijn", Number = "+31201234510", Department = "Support" },
+                new Contact { TenantId = tenantId, Name = "Boekhouding", Number = "+31201234520", Department = "Finance" });
             await db.SaveChangesAsync();
-            logger.LogInformation("Voorbeeldcontacten geseed");
+            logger.LogInformation("Voorbeeldcontacten geseed (tenant default)");
         }
     }
+
+    // Tweede voorbeeld-tenant zodat multi-tenant zichtbaar/testbaar is: eigen queue, eigen DID en
+    // een agent met genamespacede SIP-endpoint (Asterisk-breed uniek).
+    private static async Task SeedAcmeTenantAsync(CcDbContext db, int tenantId, ILogger logger)
+    {
+        if (!await db.Queues.IgnoreQueryFilters().AnyAsync(q => q.TenantId == tenantId))
+        {
+            db.Queues.Add(new QueueConfig
+            {
+                TenantId = tenantId,
+                Name = "support",
+                DisplayName = "Acme Support",
+                WelcomeText = "Welkom bij Acme. Een moment geduld alstublieft.",
+                Voice = "nl_NL-pim-medium",
+                Numbers = [new InboundNumber { Number = "+19205008322" }],
+                OpeningHours = AllDayOpeningHours(),
+            });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Wachtrij 'support' geseed (tenant acme) met nummer +19205008322");
+        }
+
+        if (!await db.Agents.IgnoreQueryFilters().AnyAsync(a => a.TenantId == tenantId))
+        {
+            var queueId = await db.Queues.IgnoreQueryFilters()
+                .Where(q => q.TenantId == tenantId).Select(q => q.Id).FirstAsync();
+            db.Agents.Add(new Agent
+            {
+                TenantId = tenantId,
+                Name = "agent2001",
+                DisplayName = "Acme Agent 2001",
+                Endpoint = "PJSIP/acme-agent2001",
+                QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueId }],
+            });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Agent 'agent2001' geseed (tenant acme)");
+        }
+
+        await EnsureSettingsAsync(db, tenantId, logger);
+    }
+
+    private static async Task EnsureSettingsAsync(CcDbContext db, int tenantId, ILogger logger)
+    {
+        if (!await db.Settings.IgnoreQueryFilters().AnyAsync(s => s.TenantId == tenantId))
+        {
+            db.Settings.Add(new GlobalSettings { TenantId = tenantId, WrapUpSeconds = 30 });
+            await db.SaveChangesAsync();
+            logger.LogInformation("Instellingen geseed (tenant {TenantId}, nawerktijd: 30s)", tenantId);
+        }
+    }
+
+    private static List<OpeningHoursWindow> AllDayOpeningHours() =>
+        Enum.GetValues<DayOfWeek>()
+            .Select(day => new OpeningHoursWindow
+            {
+                Day = day,
+                Opens = new TimeOnly(0, 0),
+                Closes = new TimeOnly(23, 59, 59),
+            })
+            .ToList();
 
     /// <summary>
     /// Genereert ontbrekende TTS-prompts voor wachtrijen met een ingestelde tekst (bv. na een verse
@@ -113,7 +188,8 @@ public static class DatabaseInitializer
     {
         if (!tts.IsEnabled) return;
 
-        var queues = await db.Queues.ToListAsync();
+        // Draait zonder tenant-context: bewust over alle tenants heen.
+        var queues = await db.Queues.IgnoreQueryFilters().ToListAsync();
         var changed = 0;
         foreach (var q in queues)
         {

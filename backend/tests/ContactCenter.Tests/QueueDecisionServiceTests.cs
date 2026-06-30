@@ -34,7 +34,7 @@ public class QueueDecisionServiceTests
 
         var action = _sut.Decide(queue, WednesdayNoonUtc);
 
-        Assert.Equal(new RouteToQueue("support", "sound:welkom"), action);
+        Assert.Equal(new RouteToQueue(0, "support", "sound:welkom"), action);
     }
 
     [Fact]

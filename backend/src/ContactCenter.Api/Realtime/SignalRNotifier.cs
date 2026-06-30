@@ -5,6 +5,6 @@ namespace ContactCenter.Api.Realtime;
 
 public sealed class SignalRNotifier(IHubContext<ContactCenterHub> hub) : IRealtimeNotifier
 {
-    public Task QueuesChangedAsync(IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
-        => hub.Clients.All.SendAsync("queuesChanged", waiting, ct);
+    public Task QueuesChangedAsync(int tenantId, IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
+        => hub.Clients.Group(TenantGroups.For(tenantId)).SendAsync("queuesChanged", waiting, ct);
 }

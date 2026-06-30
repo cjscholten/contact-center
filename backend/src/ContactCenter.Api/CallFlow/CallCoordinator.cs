@@ -40,8 +40,10 @@ public sealed class CallCoordinator : IHostedService
     private readonly ILogger<CallCoordinator> _logger;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, string> _holdingBridges = new(StringComparer.Ordinal); // queue → bridgeId
-    private readonly ConcurrentDictionary<string, string> _mohByQueue = new(StringComparer.Ordinal); // queue → MoH-klasse
+    // Sleutel = tenant-gekwalificeerde wachtrijsleutel ("{tenantId}:{queue}"), zodat gelijknamige
+    // wachtrijen van verschillende tenants niet dezelfde holding-brug/MoH delen.
+    private readonly Dictionary<string, string> _holdingBridges = new(StringComparer.Ordinal); // queueKey → bridgeId
+    private readonly ConcurrentDictionary<string, string> _mohByQueue = new(StringComparer.Ordinal); // queueKey → MoH-klasse
     private readonly List<WaitingCaller> _waiting = [];
     private readonly Dictionary<string, PendingConnect> _pending = new(StringComparer.Ordinal); // agentChannelId → pending
     private readonly Dictionary<string, ActiveCall> _activeByChannel = new(StringComparer.Ordinal);
@@ -67,14 +69,19 @@ public sealed class CallCoordinator : IHostedService
         _agents.RequestDispatch = SignalDispatch;
     }
 
-    private sealed record WaitingCaller(string ChannelId, string QueueName, string CallerId, DateTimeOffset EnqueuedAt);
+    private sealed record WaitingCaller(
+        string ChannelId, int TenantId, string QueueName, string CallerId, DateTimeOffset EnqueuedAt)
+    {
+        public string QueueKey => AgentStateService.QueueKey(TenantId, QueueName);
+    }
 
-    private sealed record PendingConnect(string AgentName, string AgentChannelId, WaitingCaller Caller);
+    private sealed record PendingConnect(int TenantId, string AgentName, string AgentChannelId, WaitingCaller Caller);
 
     private sealed class ActiveCall
     {
         public required string CallerChannelId { get; init; }
         public required string AgentChannelId { get; init; }
+        public required int TenantId { get; init; }
         public required string AgentName { get; init; }
         public required string QueueName { get; init; }
         public required string CallerId { get; init; }
@@ -97,6 +104,7 @@ public sealed class CallCoordinator : IHostedService
         public required string BridgeId { get; init; } // hergebruikte mixing-brug, nu overlegbrug
         public required string CallerChannelId { get; init; }
         public required string CallerId { get; init; }
+        public required int TenantId { get; init; }
         public required string QueueName { get; init; }
         public bool Connected { get; set; } // collega heeft het overleg aangenomen
     }
@@ -104,25 +112,26 @@ public sealed class CallCoordinator : IHostedService
     // --- Inkomende beller -----------------------------------------------------
 
     /// <summary>Plaatst een beantwoorde beller in de wacht (holding-brug + wachtmuziek) en triggert dispatch.</summary>
-    public async Task EnqueueCallerAsync(string callerChannelId, string queueName, string callerId,
+    public async Task EnqueueCallerAsync(string callerChannelId, int tenantId, string queueName, string callerId,
         CancellationToken ct = default)
     {
-        _mohByQueue[queueName] = await ResolveMohClassAsync(queueName, ct); // huidige MoH-klasse, vóór de lock
+        var queueKey = AgentStateService.QueueKey(tenantId, queueName);
+        _mohByQueue[queueKey] = await ResolveMohClassAsync(tenantId, queueName, ct); // huidige MoH-klasse, vóór de lock
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
         {
-            await PlaceInHoldingAsync(queueName, callerChannelId, ct);
-            _waiting.Add(new WaitingCaller(callerChannelId, queueName, callerId, DateTimeOffset.UtcNow));
-            _logger.LogInformation("Beller {Channel} in de wacht voor '{Queue}' ({Count} wachtend)",
-                callerChannelId, queueName, _waiting.Count(w => w.QueueName == queueName));
+            await PlaceInHoldingAsync(tenantId, queueName, callerChannelId, ct);
+            _waiting.Add(new WaitingCaller(callerChannelId, tenantId, queueName, callerId, DateTimeOffset.UtcNow));
+            _logger.LogInformation("Beller {Channel} in de wacht voor '{Queue}' (tenant {Tenant}, {Count} wachtend)",
+                callerChannelId, queueName, tenantId, _waiting.Count(w => w.QueueKey == queueKey));
             snapshot = BuildWaitingView();
         }
         finally
         {
             _gate.Release();
         }
-        await NotifyQueuesAsync(snapshot, ct);
+        await NotifyQueuesAsync(snapshot, [tenantId], ct);
         SignalDispatch();
     }
 
@@ -148,6 +157,7 @@ public sealed class CallCoordinator : IHostedService
             {
                 CallerChannelId = pending.Caller.ChannelId,
                 AgentChannelId = agentChannelId,
+                TenantId = pending.TenantId,
                 AgentName = pending.AgentName,
                 QueueName = pending.Caller.QueueName,
                 CallerId = pending.Caller.CallerId,
@@ -164,17 +174,18 @@ public sealed class CallCoordinator : IHostedService
         }
 
         if (_activeByChannel.TryGetValue(agentChannelId, out var connected))
-            await _agents.ConfirmOnCallAsync(connected.AgentName, ct);
+            await _agents.ConfirmOnCallAsync(connected.TenantId, connected.AgentName, ct);
     }
 
     // --- Kanaal weg (ophangen) ------------------------------------------------
 
     public async Task OnChannelGoneAsync(string channelId, CancellationToken ct = default)
     {
-        string? wrapUpAgent = null;
-        string? releaseAgent = null;
-        string? resetAgent = null;
+        (int TenantId, string Name)? wrapUpAgent = null;
+        (int TenantId, string Name)? releaseAgent = null;
+        (int TenantId, string Name)? resetAgent = null;
         WaitingCaller? requeue = null;
+        int? affectedTenant = null;
         var signalDispatch = false;
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
@@ -183,6 +194,7 @@ public sealed class CallCoordinator : IHostedService
             // 0) lopend overleg (warm doorverbinden): beller, agent of collega valt weg
             if (FindWarmTransfer(channelId) is { } warm)
             {
+                affectedTenant = warm.TenantId;
                 (wrapUpAgent, resetAgent, signalDispatch) = await HandleWarmChannelGoneAsync(warm, channelId, ct);
             }
             // 1) actief gesprek: ruim de brug op, hang de andere leg op, agent → nawerktijd
@@ -193,25 +205,30 @@ public sealed class CallCoordinator : IHostedService
                 var other = channelId == call.CallerChannelId ? call.AgentChannelId : call.CallerChannelId;
                 await SafeHangupAsync(other, ct);
                 await SafeDestroyBridgeAsync(call.MixingBridgeId, ct);
-                wrapUpAgent = call.AgentName;
+                wrapUpAgent = (call.TenantId, call.AgentName);
+                affectedTenant = call.TenantId;
             }
             // 2) wachtende beller hing op vóór verbinding
-            else if (_waiting.RemoveAll(w => w.ChannelId == channelId) > 0)
+            else if (_waiting.FirstOrDefault(w => w.ChannelId == channelId) is { } gone)
             {
+                _waiting.Remove(gone);
+                affectedTenant = gone.TenantId;
                 _logger.LogInformation("Wachtende beller {Channel} hing op", channelId);
             }
             // 3) agent-leg verdween tijdens rinkelen (niet opgenomen): beller terug in de wacht
             else if (_pending.Remove(channelId, out var pending))
             {
-                releaseAgent = pending.AgentName;
+                releaseAgent = (pending.TenantId, pending.AgentName);
                 requeue = pending.Caller;
+                affectedTenant = pending.TenantId;
             }
             // 4) een beller voor wie een agent aan het rinkelen is, hing zelf op
             else if (FindPendingByCaller(channelId) is { } byCaller)
             {
                 _pending.Remove(byCaller.AgentChannelId);
                 await SafeHangupAsync(byCaller.AgentChannelId, ct);
-                releaseAgent = byCaller.AgentName;
+                releaseAgent = (byCaller.TenantId, byCaller.AgentName);
+                affectedTenant = byCaller.TenantId;
             }
 
             if (requeue is not null)
@@ -226,13 +243,14 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        await NotifyQueuesAsync(snapshot, ct);
-        if (wrapUpAgent is not null)
-            await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
-        if (releaseAgent is not null)
-            await _agents.ReleaseReservationAsync(releaseAgent, ct);
-        if (resetAgent is not null)
-            await _agents.ResetToAvailableAsync(resetAgent, ct);
+        if (affectedTenant is { } at)
+            await NotifyQueuesAsync(snapshot, [at], ct);
+        if (wrapUpAgent is { } wu)
+            await _agents.BeginWrapUpAsync(wu.TenantId, wu.Name, ct);
+        if (releaseAgent is { } rel)
+            await _agents.ReleaseReservationAsync(rel.TenantId, rel.Name, ct);
+        if (resetAgent is { } res)
+            await _agents.ResetToAvailableAsync(res.TenantId, res.Name, ct);
         if (requeue is not null || signalDispatch)
             SignalDispatch();
     }
@@ -240,25 +258,25 @@ public sealed class CallCoordinator : IHostedService
     // --- In de wacht ----------------------------------------------------------
 
     /// <summary>Zet de beller in de wacht: van de mixing-brug naar de holding-brug (wachtmuziek).</summary>
-    public Task<bool> HoldAsync(string agentName, CancellationToken ct = default)
-        => SetHoldAsync(agentName, hold: true, ct);
+    public Task<bool> HoldAsync(int tenantId, string agentName, CancellationToken ct = default)
+        => SetHoldAsync(tenantId, agentName, hold: true, ct);
 
     /// <summary>Haalt de beller uit de wacht: terug van de holding-brug naar de mixing-brug.</summary>
-    public Task<bool> UnholdAsync(string agentName, CancellationToken ct = default)
-        => SetHoldAsync(agentName, hold: false, ct);
+    public Task<bool> UnholdAsync(int tenantId, string agentName, CancellationToken ct = default)
+        => SetHoldAsync(tenantId, agentName, hold: false, ct);
 
-    private async Task<bool> SetHoldAsync(string agentName, bool hold, CancellationToken ct)
+    private async Task<bool> SetHoldAsync(int tenantId, string agentName, bool hold, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == agentName);
+            var call = FindActiveByAgent(tenantId, agentName);
             if (call is null || call.OnHold == hold)
                 return false;
 
             if (hold)
             {
-                await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct); // verplaatst uit de mixing-brug
+                await PlaceInHoldingAsync(call.TenantId, call.QueueName, call.CallerChannelId, ct); // verplaatst uit de mixing-brug
             }
             else
             {
@@ -283,15 +301,15 @@ public sealed class CallCoordinator : IHostedService
     /// herrouteerd. Doel = bestaande wachtrijnaam → terug in de wacht + dispatch; anders een
     /// extern nummer → via het cc-forward-dialplan (vereist een uitgaande SBC-route).
     /// </summary>
-    public async Task<bool> ColdTransferAsync(string agentName, string target, CancellationToken ct = default)
+    public async Task<bool> ColdTransferAsync(int tenantId, string agentName, string target, CancellationToken ct = default)
     {
-        var toQueue = await IsQueueAsync(target, ct);
+        var toQueue = await IsQueueAsync(tenantId, target, ct);
 
         string callerChannelId, callerId, agentChannelId, mixingBridgeId;
         await _gate.WaitAsync(ct);
         try
         {
-            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == agentName);
+            var call = FindActiveByAgent(tenantId, agentName);
             if (call is null)
                 return false;
             // ontkoppel zodat het ophangen van de agent-leg de beller niet meeneemt
@@ -307,11 +325,11 @@ public sealed class CallCoordinator : IHostedService
 
         await SafeHangupAsync(agentChannelId, ct); // agent klaar met dit gesprek
         if (toQueue)
-            await EnqueueCallerAsync(callerChannelId, target, callerId, ct); // verplaatst beller naar holding van doelwachtrij
+            await EnqueueCallerAsync(callerChannelId, tenantId, target, callerId, ct); // verplaatst beller naar holding van doelwachtrij
         else
             await _ari.ContinueInDialplanAsync(callerChannelId, ForwardContext, target, 1, ct);
         await SafeDestroyBridgeAsync(mixingBridgeId, ct); // mixing-brug is nu leeg
-        await _agents.BeginWrapUpAsync(agentName, ct);
+        await _agents.BeginWrapUpAsync(tenantId, agentName, ct);
 
         _logger.LogInformation("Koud doorverbonden: beller {Caller} → '{Target}' ({Type}); agent {Agent} naar nawerktijd",
             callerChannelId, target, toQueue ? "wachtrij" : "extern", agentName);
@@ -323,34 +341,34 @@ public sealed class CallCoordinator : IHostedService
     /// (→ nawerktijd), de beller wacht in de holding-brug en de doel-agent wordt gebeld; bij
     /// opnemen volgt de mixing-brug. Faalt als de doel-agent offline/bezet is.
     /// </summary>
-    public async Task<bool> TransferToAgentAsync(string fromAgent, string toAgentName, CancellationToken ct = default)
+    public async Task<bool> TransferToAgentAsync(int tenantId, string fromAgent, string toAgentName, CancellationToken ct = default)
     {
         List<WaitingCallView>? requeueSnapshot = null;
-        string? wrapUpAgent = null;
+        (int TenantId, string Name)? wrapUpAgent = null;
         var ok = false;
         await _gate.WaitAsync(ct);
         try
         {
-            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == fromAgent);
+            var call = FindActiveByAgent(tenantId, fromAgent);
             if (call is null)
                 return false;
-            var reserved = await _agents.TryReserveSpecificAsync(toAgentName, ct);
+            var reserved = await _agents.TryReserveSpecificAsync(tenantId, toAgentName, ct);
             if (reserved is null)
                 return false; // doel-agent offline of al in gesprek
 
             _activeByChannel.Remove(call.CallerChannelId);
             _activeByChannel.Remove(call.AgentChannelId);
 
-            await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct); // beller wacht (wachtmuziek)
+            await PlaceInHoldingAsync(call.TenantId, call.QueueName, call.CallerChannelId, ct); // beller wacht (wachtmuziek)
             await SafeHangupAsync(call.AgentChannelId, ct);
             await SafeDestroyBridgeAsync(call.MixingBridgeId, ct);
-            wrapUpAgent = call.AgentName;
+            wrapUpAgent = (call.TenantId, call.AgentName);
 
-            var waiting = new WaitingCaller(call.CallerChannelId, call.QueueName, call.CallerId, DateTimeOffset.UtcNow);
+            var waiting = new WaitingCaller(call.CallerChannelId, call.TenantId, call.QueueName, call.CallerId, DateTimeOffset.UtcNow);
             try
             {
                 var toChannel = await _ari.OriginateToStasisAsync(reserved.Endpoint, "agent", call.CallerId, ct: ct);
-                _pending[toChannel] = new PendingConnect(reserved.Name, toChannel, waiting);
+                _pending[toChannel] = new PendingConnect(reserved.TenantId, reserved.Name, toChannel, waiting);
                 _logger.LogInformation("Beller {Caller} doorverbonden van {From} naar agent {To}",
                     call.CallerChannelId, fromAgent, reserved.Name);
                 ok = true;
@@ -358,7 +376,7 @@ public sealed class CallCoordinator : IHostedService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Originate naar doel-agent {Agent} mislukt; beller terug in de wacht", reserved.Name);
-                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
                 _waiting.Add(waiting);
                 requeueSnapshot = BuildWaitingView();
             }
@@ -368,19 +386,20 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        if (wrapUpAgent is not null)
-            await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
+        if (wrapUpAgent is { } wu)
+            await _agents.BeginWrapUpAsync(wu.TenantId, wu.Name, ct);
         if (requeueSnapshot is not null)
-            await NotifyQueuesAsync(requeueSnapshot, ct);
+            await NotifyQueuesAsync(requeueSnapshot, [tenantId], ct);
         return ok;
     }
 
-    private async Task<bool> IsQueueAsync(string target, CancellationToken ct)
+    private async Task<bool> IsQueueAsync(int tenantId, string target, CancellationToken ct)
     {
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            return await db.Queues.AsNoTracking().AnyAsync(q => q.Name == target, ct);
+            return await db.Queues.AsNoTracking().IgnoreQueryFilters()
+                .AnyAsync(q => q.TenantId == tenantId && q.Name == target, ct);
         }
         catch (Exception ex)
         {
@@ -398,28 +417,28 @@ public sealed class CallCoordinator : IHostedService
     /// wordt gebeld. Bij opnemen komt de collega in dezelfde brug. Faalt als er geen lopend gesprek
     /// is, er al een overleg loopt, of de collega offline/bezet is.
     /// </summary>
-    public async Task<bool> StartWarmTransferAsync(string fromAgent, string toAgentName, CancellationToken ct = default)
+    public async Task<bool> StartWarmTransferAsync(int tenantId, string fromAgent, string toAgentName, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            var call = _activeByChannel.Values.FirstOrDefault(c => c.AgentName == fromAgent);
-            if (call is null || _warmByAgent.ContainsKey(fromAgent))
+            var call = FindActiveByAgent(tenantId, fromAgent);
+            if (call is null || _warmByAgent.ContainsKey(WarmKey(tenantId, fromAgent)))
                 return false;
-            var reserved = await _agents.TryReserveSpecificAsync(toAgentName, ct);
+            var reserved = await _agents.TryReserveSpecificAsync(tenantId, toAgentName, ct);
             if (reserved is null)
                 return false; // collega offline of al in gesprek
 
             // beller parkeren; de agent blijft achter in de mixing-brug (wordt overlegbrug)
             _activeByChannel.Remove(call.CallerChannelId);
             _activeByChannel.Remove(call.AgentChannelId);
-            await PlaceInHoldingAsync(call.QueueName, call.CallerChannelId, ct);
+            await PlaceInHoldingAsync(call.TenantId, call.QueueName, call.CallerChannelId, ct);
 
             try
             {
                 var consultChannel =
                     await _ari.OriginateToStasisAsync(reserved.Endpoint, ConsultAppArg, call.CallerId, ct: ct);
-                _warmByAgent[fromAgent] = new WarmTransfer
+                _warmByAgent[WarmKey(tenantId, fromAgent)] = new WarmTransfer
                 {
                     FromAgentName = fromAgent,
                     FromAgentChannelId = call.AgentChannelId,
@@ -428,6 +447,7 @@ public sealed class CallCoordinator : IHostedService
                     BridgeId = call.MixingBridgeId,
                     CallerChannelId = call.CallerChannelId,
                     CallerId = call.CallerId,
+                    TenantId = call.TenantId,
                     QueueName = call.QueueName,
                 };
                 _logger.LogInformation("Overleg gestart: agent {From} raadpleegt {To} over beller {Caller}",
@@ -442,7 +462,7 @@ public sealed class CallCoordinator : IHostedService
                 call.OnHold = false;
                 _activeByChannel[call.CallerChannelId] = call;
                 _activeByChannel[call.AgentChannelId] = call;
-                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
                 return false;
             }
         }
@@ -455,7 +475,7 @@ public sealed class CallCoordinator : IHostedService
     /// <summary>De geraadpleegde collega nam het overleg aan: voeg die toe aan de overlegbrug.</summary>
     public async Task OnConsultAnsweredAsync(string consultChannelId, CancellationToken ct = default)
     {
-        string? confirmAgent = null;
+        (int TenantId, string Name)? confirmAgent = null;
         await _gate.WaitAsync(ct);
         try
         {
@@ -468,7 +488,7 @@ public sealed class CallCoordinator : IHostedService
             }
             await _ari.AddToBridgeAsync(wt.BridgeId, consultChannelId, ct);
             wt.Connected = true;
-            confirmAgent = wt.ConsultAgentName;
+            confirmAgent = (wt.TenantId, wt.ConsultAgentName);
             _logger.LogInformation("Collega {Agent} neemt deel aan overleg (brug {Bridge})",
                 wt.ConsultAgentName, wt.BridgeId);
         }
@@ -477,29 +497,29 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        if (confirmAgent is not null)
-            await _agents.ConfirmOnCallAsync(confirmAgent, ct);
+        if (confirmAgent is { } ca)
+            await _agents.ConfirmOnCallAsync(ca.TenantId, ca.Name, ct);
     }
 
     /// <summary>
     /// Voltooi het overleg: de doorverbindende agent stapt eruit (→ nawerktijd) en de beller komt
     /// bij de collega in de brug. Kan pas zodra de collega het overleg heeft aangenomen.
     /// </summary>
-    public async Task<bool> CompleteWarmTransferAsync(string fromAgent, CancellationToken ct = default)
+    public async Task<bool> CompleteWarmTransferAsync(int tenantId, string fromAgent, CancellationToken ct = default)
     {
-        string? wrapUpAgent = null;
+        (int TenantId, string Name)? wrapUpAgent = null;
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_warmByAgent.TryGetValue(fromAgent, out var wt) || !wt.Connected)
+            if (!_warmByAgent.TryGetValue(WarmKey(tenantId, fromAgent), out var wt) || !wt.Connected)
                 return false;
-            _warmByAgent.Remove(fromAgent);
+            _warmByAgent.Remove(WarmKey(tenantId, fromAgent));
 
             await SafeHangupAsync(wt.FromAgentChannelId, ct);                 // agent-leg eruit
             await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct); // beller uit holding → bij collega
-            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.ConsultAgentName,
+            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.TenantId, wt.ConsultAgentName,
                 wt.QueueName, wt.CallerId, wt.BridgeId);
-            wrapUpAgent = wt.FromAgentName;
+            wrapUpAgent = (wt.TenantId, wt.FromAgentName);
             _logger.LogInformation("Overleg voltooid: beller {Caller} nu bij collega {Agent}; {From} naar nawerktijd",
                 wt.CallerChannelId, wt.ConsultAgentName, wt.FromAgentName);
         }
@@ -508,8 +528,8 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        if (wrapUpAgent is not null)
-            await _agents.BeginWrapUpAsync(wrapUpAgent, ct);
+        if (wrapUpAgent is { } wu)
+            await _agents.BeginWrapUpAsync(wu.TenantId, wu.Name, ct);
         return true;
     }
 
@@ -517,20 +537,20 @@ public sealed class CallCoordinator : IHostedService
     /// Annuleer het overleg: de collega-leg eindigt en de beller gaat terug naar de oorspronkelijke
     /// agent. Werkt ook wanneer de collega nog niet had opgenomen.
     /// </summary>
-    public async Task<bool> CancelWarmTransferAsync(string fromAgent, CancellationToken ct = default)
+    public async Task<bool> CancelWarmTransferAsync(int tenantId, string fromAgent, CancellationToken ct = default)
     {
-        string? resetAgent = null;
+        (int TenantId, string Name)? resetAgent = null;
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_warmByAgent.Remove(fromAgent, out var wt))
+            if (!_warmByAgent.Remove(WarmKey(tenantId, fromAgent), out var wt))
                 return false;
 
             await SafeHangupAsync(wt.ConsultChannelId, ct);                  // collega-leg eruit
             await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct); // beller terug bij agent
-            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.FromAgentName,
+            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.TenantId, wt.FromAgentName,
                 wt.QueueName, wt.CallerId, wt.BridgeId);
-            resetAgent = wt.ConsultAgentName;
+            resetAgent = (wt.TenantId, wt.ConsultAgentName);
             _logger.LogInformation("Overleg geannuleerd: beller {Caller} terug bij {From}; collega {Consult} vrij",
                 wt.CallerChannelId, wt.FromAgentName, wt.ConsultAgentName);
         }
@@ -539,8 +559,8 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        if (resetAgent is not null)
-            await _agents.ResetToAvailableAsync(resetAgent, ct);
+        if (resetAgent is { } res)
+            await _agents.ResetToAvailableAsync(res.TenantId, res.Name, ct);
         return true;
     }
 
@@ -552,7 +572,7 @@ public sealed class CallCoordinator : IHostedService
     /// Een kanaal van een lopend overleg viel weg. Aangeroepen terwijl _gate vastgehouden wordt; geeft
     /// terug welke nazorg buiten de lock moet (nawerktijd-agent, vrij te geven collega, herdispatch).
     /// </summary>
-    private async Task<(string? WrapUp, string? Reset, bool Requeued)> HandleWarmChannelGoneAsync(
+    private async Task<((int, string)? WrapUp, (int, string)? Reset, bool Requeued)> HandleWarmChannelGoneAsync(
         WarmTransfer wt, string channelId, CancellationToken ct)
     {
         _warmByAgent.Remove(wt.FromAgentName);
@@ -565,18 +585,18 @@ public sealed class CallCoordinator : IHostedService
             await SafeDestroyBridgeAsync(wt.BridgeId, ct);
             _logger.LogInformation("Beller hing op tijdens overleg; {From} naar nawerktijd, collega {Consult} vrij",
                 wt.FromAgentName, wt.ConsultAgentName);
-            return (wt.FromAgentName, wt.ConsultAgentName, false);
+            return ((wt.TenantId, wt.FromAgentName), (wt.TenantId, wt.ConsultAgentName), false);
         }
 
         if (channelId == wt.ConsultChannelId)
         {
             // collega nam niet op of hing op: beller terug bij de oorspronkelijke agent
             await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct);
-            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.FromAgentName,
+            RegisterActiveCall(wt.CallerChannelId, wt.FromAgentChannelId, wt.TenantId, wt.FromAgentName,
                 wt.QueueName, wt.CallerId, wt.BridgeId);
             _logger.LogInformation("Collega {Consult} verliet het overleg; beller terug bij {From}",
                 wt.ConsultAgentName, wt.FromAgentName);
-            return (null, wt.ConsultAgentName, false);
+            return (null, (wt.TenantId, wt.ConsultAgentName), false);
         }
 
         // channelId == wt.FromAgentChannelId: de doorverbindende agent verbrak zelf
@@ -584,28 +604,29 @@ public sealed class CallCoordinator : IHostedService
         {
             // collega zat al in het overleg: draag de beller over (alsof voltooid)
             await _ari.AddToBridgeAsync(wt.BridgeId, wt.CallerChannelId, ct);
-            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.ConsultAgentName,
+            RegisterActiveCall(wt.CallerChannelId, wt.ConsultChannelId, wt.TenantId, wt.ConsultAgentName,
                 wt.QueueName, wt.CallerId, wt.BridgeId);
             _logger.LogInformation("Agent {From} verbrak tijdens overleg; beller overgedragen aan {Consult}",
                 wt.FromAgentName, wt.ConsultAgentName);
-            return (wt.FromAgentName, null, false);
+            return ((wt.TenantId, wt.FromAgentName), null, false);
         }
 
         // collega had nog niet opgenomen: beller terug in de wacht, collega vrijgeven
         await SafeHangupAsync(wt.ConsultChannelId, ct);
-        _waiting.Add(new WaitingCaller(wt.CallerChannelId, wt.QueueName, wt.CallerId, DateTimeOffset.UtcNow));
+        _waiting.Add(new WaitingCaller(wt.CallerChannelId, wt.TenantId, wt.QueueName, wt.CallerId, DateTimeOffset.UtcNow));
         _logger.LogInformation("Agent {From} verbrak vóór het overleg; beller terug in de wacht voor '{Queue}'",
             wt.FromAgentName, wt.QueueName);
-        return (wt.FromAgentName, wt.ConsultAgentName, true);
+        return ((wt.TenantId, wt.FromAgentName), (wt.TenantId, wt.ConsultAgentName), true);
     }
 
-    private void RegisterActiveCall(string callerChannelId, string agentChannelId, string agentName,
+    private void RegisterActiveCall(string callerChannelId, string agentChannelId, int tenantId, string agentName,
         string queueName, string callerId, string bridgeId)
     {
         var call = new ActiveCall
         {
             CallerChannelId = callerChannelId,
             AgentChannelId = agentChannelId,
+            TenantId = tenantId,
             AgentName = agentName,
             QueueName = queueName,
             CallerId = callerId,
@@ -622,17 +643,18 @@ public sealed class CallCoordinator : IHostedService
     /// alleen als het nog wacht en reserveert déze agent. De agent wordt gebeld (originate);
     /// bij opnemen volgt de mixing-brug, net als bij automatische toewijzing.
     /// </summary>
-    public async Task<bool> PickupAsync(string agentName, string callerChannelId, CancellationToken ct = default)
+    public async Task<bool> PickupAsync(int tenantId, string agentName, string callerChannelId, CancellationToken ct = default)
     {
         List<WaitingCallView>? snapshot = null;
         await _gate.WaitAsync(ct);
         try
         {
-            var idx = _waiting.FindIndex(w => w.ChannelId == callerChannelId);
+            // alleen een wachtende beller van deze tenant mag opgepakt worden
+            var idx = _waiting.FindIndex(w => w.ChannelId == callerChannelId && w.TenantId == tenantId);
             if (idx < 0)
                 return false; // gesprek al aangenomen of opgehangen
 
-            var reserved = await _agents.TryReserveSpecificAsync(agentName, ct);
+            var reserved = await _agents.TryReserveSpecificAsync(tenantId, agentName, ct);
             if (reserved is null)
                 return false; // agent heeft al een lopend gesprek
 
@@ -642,7 +664,7 @@ public sealed class CallCoordinator : IHostedService
                 var agentChannelId =
                     await _ari.OriginateToStasisAsync(reserved.Endpoint, "agent", caller.CallerId, ct: ct);
                 _waiting.RemoveAt(idx);
-                _pending[agentChannelId] = new PendingConnect(reserved.Name, agentChannelId, caller);
+                _pending[agentChannelId] = new PendingConnect(reserved.TenantId, reserved.Name, agentChannelId, caller);
                 _logger.LogInformation("Beller {Caller} handmatig aangenomen door agent {Agent}, originate {Channel}",
                     caller.ChannelId, reserved.Name, agentChannelId);
                 snapshot = BuildWaitingView();
@@ -650,7 +672,7 @@ public sealed class CallCoordinator : IHostedService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Originate (pickup) naar agent {Agent} mislukt; reservering vrijgeven", reserved.Name);
-                await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
                 return false;
             }
         }
@@ -660,7 +682,7 @@ public sealed class CallCoordinator : IHostedService
         }
 
         if (snapshot is not null)
-            await NotifyQueuesAsync(snapshot, ct);
+            await NotifyQueuesAsync(snapshot, [tenantId], ct);
         return true;
     }
 
@@ -684,7 +706,7 @@ public sealed class CallCoordinator : IHostedService
 
     internal async Task TryDispatchAllAsync(CancellationToken ct = default)
     {
-        var anyDispatched = false;
+        var dispatchedTenants = new HashSet<int>();
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
@@ -695,7 +717,7 @@ public sealed class CallCoordinator : IHostedService
                 progress = false;
                 foreach (var caller in _waiting.OrderBy(_ => 0).ToList()) // oudste eerst (invoegvolgorde)
                 {
-                    var reserved = await _agents.TryReserveForCallAsync([caller.QueueName], ct);
+                    var reserved = await _agents.TryReserveForCallAsync([caller.QueueKey], ct);
                     if (reserved is null)
                         continue;
 
@@ -704,18 +726,18 @@ public sealed class CallCoordinator : IHostedService
                         var agentChannelId = await _ari.OriginateToStasisAsync(
                             reserved.Endpoint, "agent", caller.CallerId, ct: ct);
                         _waiting.Remove(caller);
-                        _pending[agentChannelId] = new PendingConnect(reserved.Name, agentChannelId, caller);
+                        _pending[agentChannelId] = new PendingConnect(reserved.TenantId, reserved.Name, agentChannelId, caller);
                         _logger.LogInformation("Beller {Caller} toegewezen aan agent {Agent}, originate {Channel}",
                             caller.ChannelId, reserved.Name, agentChannelId);
                     }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Originate naar agent {Agent} mislukt; reservering vrijgeven", reserved.Name);
-                        await _agents.ReleaseReservationAsync(reserved.Name, ct);
+                        await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
                         continue;
                     }
 
-                    anyDispatched = true;
+                    dispatchedTenants.Add(caller.TenantId);
                     progress = true;
                     break; // wachtlijst is gemuteerd; herstart de pass
                 }
@@ -727,8 +749,8 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
-        if (anyDispatched)
-            await NotifyQueuesAsync(snapshot, ct);
+        if (dispatchedTenants.Count > 0)
+            await NotifyQueuesAsync(snapshot, dispatchedTenants, ct);
     }
 
     // --- Positie-meldingen ----------------------------------------------------
@@ -768,8 +790,8 @@ public sealed class CallCoordinator : IHostedService
             targets = [];
             foreach (var caller in _waiting) // invoegvolgorde = wachtvolgorde
             {
-                var pos = perQueue.GetValueOrDefault(caller.QueueName) + 1;
-                perQueue[caller.QueueName] = pos;
+                var pos = perQueue.GetValueOrDefault(caller.QueueKey) + 1;
+                perQueue[caller.QueueKey] = pos;
                 targets.Add((caller.ChannelId, pos));
             }
         }
@@ -812,27 +834,29 @@ public sealed class CallCoordinator : IHostedService
     /// De MoH moet ná de join opnieuw worden gestart: Asterisk stopt de music-on-hold zodra
     /// de brug leeg raakt (bv. nadat een wachtende beller naar een agent is verbonden).
     /// </summary>
-    private async Task PlaceInHoldingAsync(string queueName, string channelId, CancellationToken ct)
+    private async Task PlaceInHoldingAsync(int tenantId, string queueName, string channelId, CancellationToken ct)
     {
-        if (!_holdingBridges.TryGetValue(queueName, out var bridgeId))
+        var queueKey = AgentStateService.QueueKey(tenantId, queueName);
+        if (!_holdingBridges.TryGetValue(queueKey, out var bridgeId))
         {
             bridgeId = await _ari.CreateBridgeAsync("holding", ct);
-            _holdingBridges[queueName] = bridgeId;
-            _logger.LogInformation("Holding-brug {Bridge} aangemaakt voor wachtrij '{Queue}'", bridgeId, queueName);
+            _holdingBridges[queueKey] = bridgeId;
+            _logger.LogInformation("Holding-brug {Bridge} aangemaakt voor wachtrij '{Queue}' (tenant {Tenant})",
+                bridgeId, queueName, tenantId);
         }
 
         await _ari.AddToBridgeAsync(bridgeId, channelId, ct);
-        await _ari.StartBridgeMohAsync(bridgeId, _mohByQueue.GetValueOrDefault(queueName, DefaultMohClass), ct);
+        await _ari.StartBridgeMohAsync(bridgeId, _mohByQueue.GetValueOrDefault(queueKey, DefaultMohClass), ct);
     }
 
-    /// <summary>Leest de music-on-hold-klasse van de wachtrij; terugval op "default" bij fout/leeg.</summary>
-    private async Task<string> ResolveMohClassAsync(string queueName, CancellationToken ct)
+    /// <summary>Leest de music-on-hold-klasse van de wachtrij (van deze tenant); terugval op "default" bij fout/leeg.</summary>
+    private async Task<string> ResolveMohClassAsync(int tenantId, string queueName, CancellationToken ct)
     {
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var moh = await db.Queues.AsNoTracking()
-                .Where(q => q.Name == queueName)
+            var moh = await db.Queues.AsNoTracking().IgnoreQueryFilters()
+                .Where(q => q.TenantId == tenantId && q.Name == queueName)
                 .Select(q => q.MusicOnHoldClass)
                 .FirstOrDefaultAsync(ct);
             return string.IsNullOrWhiteSpace(moh) ? DefaultMohClass : moh;
@@ -845,25 +869,41 @@ public sealed class CallCoordinator : IHostedService
         }
     }
 
+    private ActiveCall? FindActiveByAgent(int tenantId, string agentName)
+        => _activeByChannel.Values.FirstOrDefault(c => c.TenantId == tenantId && c.AgentName == agentName);
+
+    private static string WarmKey(int tenantId, string agentName) => $"{tenantId}:{agentName}";
+
     private PendingConnect? FindPendingByCaller(string callerChannelId)
         => _pending.Values.FirstOrDefault(p => p.Caller.ChannelId == callerChannelId);
 
-    /// <summary>Huidige wachtende gesprekken (voor de initiële GET; updates lopen via de notifier).</summary>
-    public async Task<IReadOnlyList<WaitingCallView>> GetWaitingViewAsync(CancellationToken ct = default)
+    /// <summary>Huidige wachtende gesprekken van één tenant (voor de initiële GET; updates lopen via de notifier).</summary>
+    public async Task<IReadOnlyList<WaitingCallView>> GetWaitingViewAsync(int tenantId, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        try { return BuildWaitingView(); }
+        try { return [.. BuildWaitingView().Where(w => w.TenantId == tenantId)]; }
         finally { _gate.Release(); }
     }
 
-    /// <summary>Aanname: aangeroepen terwijl _gate vastgehouden wordt.</summary>
+    /// <summary>Aanname: aangeroepen terwijl _gate vastgehouden wordt. Bevat alle tenants.</summary>
     private List<WaitingCallView> BuildWaitingView()
-        => [.. _waiting.Select(w => new WaitingCallView(w.ChannelId, w.QueueName, w.CallerId, w.EnqueuedAt))];
+        => [.. _waiting.Select(w => new WaitingCallView(w.ChannelId, w.TenantId, w.QueueName, w.CallerId, w.EnqueuedAt))];
 
-    private async Task NotifyQueuesAsync(IReadOnlyList<WaitingCallView> snapshot, CancellationToken ct)
+    /// <summary>Pusht per opgegeven tenant diens slice van de (volledige) snapshot naar diens groep.</summary>
+    private async Task NotifyQueuesAsync(IReadOnlyList<WaitingCallView> snapshot, IReadOnlyCollection<int> tenantIds,
+        CancellationToken ct)
     {
-        try { await _notifier.QueuesChangedAsync(snapshot, ct); }
-        catch (Exception ex) { _logger.LogWarning("Wachtrij-update pushen mislukt: {Reden}", ex.Message); }
+        foreach (var tenantId in tenantIds.Distinct())
+        {
+            try
+            {
+                await _notifier.QueuesChangedAsync(tenantId, [.. snapshot.Where(w => w.TenantId == tenantId)], ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Wachtrij-update pushen voor tenant {Tenant} mislukt: {Reden}", tenantId, ex.Message);
+            }
+        }
     }
 
     private async Task SafeHangupAsync(string channelId, CancellationToken ct)

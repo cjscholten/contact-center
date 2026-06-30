@@ -8,6 +8,11 @@ namespace ContactCenter.Api.Agents;
 /// Available → Ringing → OnCall → WrapUp) en de handmatige beschikbaarheid (Presence:
 /// Available/Break/Unavailable). Kiesbaar voor automatische toewijzing = gespreksfase
 /// Available én Presence Available. Status leeft in-memory (herstart = iedereen uitgelogd).
+///
+/// Multi-tenant: een agent wordt geïdentificeerd door (tenantId, naam) — agentnamen zijn
+/// alleen binnen een tenant uniek. Wachtrij-lidmaatschap wordt opgeslagen als tenant-
+/// gekwalificeerde sleutel ("{tenantId}:{queue}"), zodat een agent nooit voor een gelijknamige
+/// wachtrij van een andere tenant gereserveerd kan worden.
 /// </summary>
 public sealed class AgentStateService(
     IDbContextFactory<CcDbContext> dbFactory,
@@ -18,47 +23,55 @@ public sealed class AgentStateService(
     /// <summary>Niet-blokkerend signaal dat er werk te verdelen valt (geen await → geen lock-cykel).</summary>
     public Action? RequestDispatch { get; set; }
 
+    /// <summary>Tenant-gekwalificeerde wachtrijsleutel zoals gebruikt voor reservering/dispatch.</summary>
+    public static string QueueKey(int tenantId, string queueName) => $"{tenantId}:{queueName}";
+
+    private static string AgentKey(int tenantId, string name) => $"{tenantId}:{name.ToLowerInvariant()}";
+
     private sealed class RuntimeState
     {
+        public required int TenantId { get; init; }
         public required string Name { get; init; }
         public required string DisplayName { get; init; }
         public required string Endpoint { get; init; }
-        public required List<string> QueueNames { get; init; }
+        public required List<string> QueueKeys { get; init; }
         public AgentStatus Status { get; set; } = AgentStatus.Available;
         public Presence Presence { get; set; } = Presence.Available;
         public DateTimeOffset Since { get; set; } = DateTimeOffset.UtcNow;
         public CancellationTokenSource? WrapUpTimer { get; set; }
     }
 
-    private readonly Dictionary<string, RuntimeState> _loggedIn = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RuntimeState> _loggedIn = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public async Task<AgentSnapshot?> LoginAsync(string name, CancellationToken ct = default)
+    public async Task<AgentSnapshot?> LoginAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var agent = await db.Agents.AsNoTracking()
+        var agent = await db.Agents.AsNoTracking().IgnoreQueryFilters()
             .Include(a => a.QueueAssignments).ThenInclude(qa => qa.Queue)
-            .FirstOrDefaultAsync(a => a.Name == name, ct);
+            .FirstOrDefaultAsync(a => a.TenantId == tenantId && a.Name == name, ct);
         if (agent is null)
             return null;
 
+        var key = AgentKey(tenantId, name);
         AgentSnapshot snapshot;
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var existing))
+            if (_loggedIn.TryGetValue(key, out var existing))
                 existing.WrapUpTimer?.Cancel();
 
             var state = new RuntimeState
             {
+                TenantId = tenantId,
                 Name = agent.Name,
                 DisplayName = agent.DisplayName,
                 Endpoint = agent.Endpoint,
-                QueueNames = [.. agent.QueueAssignments.Select(qa => qa.Queue!.Name)],
+                QueueKeys = [.. agent.QueueAssignments.Select(qa => QueueKey(tenantId, qa.Queue!.Name))],
             };
-            _loggedIn[name] = state;
-            logger.LogInformation("Agent {Agent} ingelogd, wachtrijen: {Queues}",
-                name, string.Join(", ", state.QueueNames));
+            _loggedIn[key] = state;
+            logger.LogInformation("Agent {Agent} (tenant {Tenant}) ingelogd, wachtrijen: {Queues}",
+                name, tenantId, string.Join(", ", state.QueueKeys));
             snapshot = Snapshot(state);
         }
         finally
@@ -70,17 +83,17 @@ public sealed class AgentStateService(
         return snapshot;
     }
 
-    public async Task<AgentSnapshot?> LogoutAsync(string name, CancellationToken ct = default)
+    public async Task<AgentSnapshot?> LogoutAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_loggedIn.Remove(name, out var state))
+            if (!_loggedIn.Remove(AgentKey(tenantId, name), out var state))
                 return null;
             state.WrapUpTimer?.Cancel();
             state.Status = AgentStatus.LoggedOut;
             state.Since = DateTimeOffset.UtcNow;
-            logger.LogInformation("Agent {Agent} uitgelogd", name);
+            logger.LogInformation("Agent {Agent} (tenant {Tenant}) uitgelogd", name, tenantId);
             return Snapshot(state);
         }
         finally
@@ -90,17 +103,17 @@ public sealed class AgentStateService(
     }
 
     /// <summary>Handmatige beschikbaarheid zetten. Naar Available maakt de agent (weer) kiesbaar.</summary>
-    public async Task<AgentSnapshot?> SetPresenceAsync(string name, Presence presence, CancellationToken ct = default)
+    public async Task<AgentSnapshot?> SetPresenceAsync(int tenantId, string name, Presence presence, CancellationToken ct = default)
     {
         AgentSnapshot? snapshot;
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_loggedIn.TryGetValue(name, out var state))
+            if (!_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
                 return null;
             state.Presence = presence;
             state.Since = DateTimeOffset.UtcNow;
-            logger.LogInformation("Agent {Agent} presence → {Presence}", name, presence);
+            logger.LogInformation("Agent {Agent} (tenant {Tenant}) presence → {Presence}", name, tenantId, presence);
             snapshot = Snapshot(state);
         }
         finally
@@ -113,8 +126,8 @@ public sealed class AgentStateService(
         return snapshot;
     }
 
-    /// <summary>Automatische toewijzing: reserveert een kiesbare agent in één van de wachtrijen.</summary>
-    public async Task<ReservedAgent?> TryReserveForCallAsync(IReadOnlyCollection<string> queueNames,
+    /// <summary>Automatische toewijzing: reserveert een kiesbare agent in één van de (tenant-gekwalificeerde) wachtrijen.</summary>
+    public async Task<ReservedAgent?> TryReserveForCallAsync(IReadOnlyCollection<string> queueKeys,
         CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
@@ -123,11 +136,11 @@ public sealed class AgentStateService(
             var state = _loggedIn.Values.FirstOrDefault(s =>
                 s.Status == AgentStatus.Available
                 && s.Presence == Presence.Available
-                && s.QueueNames.Any(queueNames.Contains));
+                && s.QueueKeys.Any(queueKeys.Contains));
             if (state is null)
                 return null;
             SetStatus(state, AgentStatus.Ringing);
-            return new ReservedAgent(state.Name, state.Endpoint);
+            return new ReservedAgent(state.TenantId, state.Name, state.Endpoint);
         }
         finally
         {
@@ -136,15 +149,15 @@ public sealed class AgentStateService(
     }
 
     /// <summary>Handmatig aannemen: reserveert déze agent als die geen lopend gesprek heeft (presence-onafhankelijk).</summary>
-    public async Task<ReservedAgent?> TryReserveSpecificAsync(string name, CancellationToken ct = default)
+    public async Task<ReservedAgent?> TryReserveSpecificAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var state) && state.Status == AgentStatus.Available)
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state) && state.Status == AgentStatus.Available)
             {
                 SetStatus(state, AgentStatus.Ringing);
-                return new ReservedAgent(state.Name, state.Endpoint);
+                return new ReservedAgent(state.TenantId, state.Name, state.Endpoint);
             }
             return null;
         }
@@ -154,16 +167,16 @@ public sealed class AgentStateService(
         }
     }
 
-    public Task ConfirmOnCallAsync(string name, CancellationToken ct = default)
-        => TransitionAsync(name, AgentStatus.OnCall, ct);
+    public Task ConfirmOnCallAsync(int tenantId, string name, CancellationToken ct = default)
+        => TransitionAsync(tenantId, name, AgentStatus.OnCall, ct);
 
     /// <summary>Originate mislukte of werd niet beantwoord: agent weer beschikbaar.</summary>
-    public async Task ReleaseReservationAsync(string name, CancellationToken ct = default)
+    public async Task ReleaseReservationAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var state) && state.Status == AgentStatus.Ringing)
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state) && state.Status == AgentStatus.Ringing)
                 SetStatus(state, AgentStatus.Available);
         }
         finally
@@ -176,12 +189,12 @@ public sealed class AgentStateService(
     /// <summary>Overleg afgebroken: zet de geraadpleegde agent meteen terug op beschikbaar, of die
     /// nu nog gebeld werd (Ringing) of het overleg al had aangenomen (OnCall). Geen nawerktijd —
     /// er was geen echt klantgesprek.</summary>
-    public async Task ResetToAvailableAsync(string name, CancellationToken ct = default)
+    public async Task ResetToAvailableAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var state)
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state)
                 && state.Status is AgentStatus.Ringing or AgentStatus.OnCall)
                 SetStatus(state, AgentStatus.Available);
         }
@@ -193,14 +206,14 @@ public sealed class AgentStateService(
     }
 
     /// <summary>Gesprek beëindigd: start nawerktijd (of meteen beschikbaar als die 0 is).</summary>
-    public async Task BeginWrapUpAsync(string name, CancellationToken ct = default)
+    public async Task BeginWrapUpAsync(int tenantId, string name, CancellationToken ct = default)
     {
-        var seconds = await GetWrapUpSecondsAsync(ct);
+        var seconds = await GetWrapUpSecondsAsync(tenantId, ct);
 
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_loggedIn.TryGetValue(name, out var state) || state.Status == AgentStatus.LoggedOut)
+            if (!_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state) || state.Status == AgentStatus.LoggedOut)
                 return;
             if (seconds <= 0)
             {
@@ -221,14 +234,14 @@ public sealed class AgentStateService(
     }
 
     /// <summary>Beëindigt de nawerktijd vroegtijdig (de "klaar"-knop).</summary>
-    public async Task<AgentSnapshot?> FinishWrapUpAsync(string name, CancellationToken ct = default)
+    public async Task<AgentSnapshot?> FinishWrapUpAsync(int tenantId, string name, CancellationToken ct = default)
     {
         AgentSnapshot? snapshot;
         var becameAvailable = false;
         await _gate.WaitAsync(ct);
         try
         {
-            if (!_loggedIn.TryGetValue(name, out var state))
+            if (!_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
                 return null;
             if (state.Status == AgentStatus.WrapUp)
             {
@@ -249,12 +262,12 @@ public sealed class AgentStateService(
         return snapshot;
     }
 
-    public async Task<AgentSnapshot?> GetAsync(string name, CancellationToken ct = default)
+    public async Task<AgentSnapshot?> GetAsync(int tenantId, string name, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var state))
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
                 return Snapshot(state);
         }
         finally
@@ -263,19 +276,21 @@ public sealed class AgentStateService(
         }
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var agent = await db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Name == name, ct);
+        var agent = await db.Agents.AsNoTracking().IgnoreQueryFilters()
+            .FirstOrDefaultAsync(a => a.TenantId == tenantId && a.Name == name, ct);
         return agent is null ? null : LoggedOutSnapshot(agent.Name, agent.DisplayName);
     }
 
-    public async Task<IReadOnlyList<AgentSnapshot>> GetAllAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<AgentSnapshot>> GetAllAsync(int tenantId, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var agents = await db.Agents.AsNoTracking().OrderBy(a => a.Name).ToListAsync(ct);
+        var agents = await db.Agents.AsNoTracking().IgnoreQueryFilters()
+            .Where(a => a.TenantId == tenantId).OrderBy(a => a.Name).ToListAsync(ct);
 
         await _gate.WaitAsync(ct);
         try
         {
-            return [.. agents.Select(a => _loggedIn.TryGetValue(a.Name, out var state)
+            return [.. agents.Select(a => _loggedIn.TryGetValue(AgentKey(tenantId, a.Name), out var state)
                 ? Snapshot(state)
                 : LoggedOutSnapshot(a.Name, a.DisplayName))];
         }
@@ -285,12 +300,12 @@ public sealed class AgentStateService(
         }
     }
 
-    private async Task TransitionAsync(string name, AgentStatus status, CancellationToken ct)
+    private async Task TransitionAsync(int tenantId, string name, AgentStatus status, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            if (_loggedIn.TryGetValue(name, out var state))
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
                 SetStatus(state, status);
         }
         finally
@@ -308,7 +323,7 @@ public sealed class AgentStateService(
             try
             {
                 await Task.Delay(duration, cts.Token);
-                await FinishWrapUpAsync(state.Name);
+                await FinishWrapUpAsync(state.TenantId, state.Name);
             }
             catch (OperationCanceledException)
             {
@@ -321,12 +336,13 @@ public sealed class AgentStateService(
         });
     }
 
-    private async Task<int> GetWrapUpSecondsAsync(CancellationToken ct)
+    private async Task<int> GetWrapUpSecondsAsync(int tenantId, CancellationToken ct)
     {
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var settings = await db.Settings.AsNoTracking().FirstOrDefaultAsync(ct);
+            var settings = await db.Settings.AsNoTracking().IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.TenantId == tenantId, ct);
             return settings?.WrapUpSeconds ?? DefaultWrapUpSeconds;
         }
         catch (Exception ex)
@@ -351,4 +367,4 @@ public sealed class AgentStateService(
         => new(name, displayName, AgentStatus.LoggedOut, Presence.Available, default);
 }
 
-public sealed record ReservedAgent(string Name, string Endpoint);
+public sealed record ReservedAgent(int TenantId, string Name, string Endpoint);

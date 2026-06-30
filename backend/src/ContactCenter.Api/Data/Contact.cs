@@ -4,6 +4,10 @@ namespace ContactCenter.Api.Data;
 public class Contact
 {
     public int Id { get; set; }
+
+    /// <summary>Eigenaar (klant) van dit contact. Zie <see cref="Tenant"/>.</summary>
+    public int TenantId { get; set; }
+
     public required string Name { get; set; }
     public required string Number { get; set; }
     public string? Department { get; set; }
