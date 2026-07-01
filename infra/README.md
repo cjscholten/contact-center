@@ -26,6 +26,14 @@ Voor TLS (Caddy) **80/tcp** + **443/tcp** open vanaf `Internet` (80 is nodig voo
 Let's Encrypt-validatie). Als alles via Caddy loopt, kunnen de directe HTTP-poorten
 (**5080**, **8080**) van internet worden dichtgezet — de backend praat intern via localhost.
 
+**5060/SIP (trunk):** houd **5060/udp** in de NSG beperkt tot de VNet (`AllowVnetInBound`) —
+de SBC zit in dezelfde VNet, dus internet hoeft 5060 niet te bereiken. Dit is de primaire
+gate. Aan de Asterisk-kant is anonieme SIP al uitgesloten (`endpoint_identifier_order=ip,username`,
+geen anonymous-endpoint, unidentified-request-throttling). Optionele defense-in-depth: zet
+`SIP_ACL_PERMIT` (comma-gescheiden CIDR's) in `infra/.env` voor een bron-IP-allowlist — bijv.
+`127.0.0.1/8,172.16.0.0/24`. Let op: die ACL geldt óók voor de WS-agents, dus zet 'm pas aan
+zodra WS via Caddy (localhost) loopt, samen met de TLS-deploy.
+
 ## TLS / reverse proxy (Caddy)
 
 `caddy` termineert TLS voor alle browser-verkeer en regelt automatisch Let's Encrypt-certs
