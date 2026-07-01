@@ -25,14 +25,21 @@ services:
     container_name: cc-coturn
     network_mode: host
     restart: unless-stopped
-    command: >
-      -n --log-file=stdout --no-cli --no-multicast-peers
-      --listening-port=3478
-      --min-port=49160 --max-port=49200
-      --realm=${TURN_REALM:-contactcenter}
-      --use-auth-secret --static-auth-secret=${TURN_SECRET:?zet TURN_SECRET in infra/.env (zie infra/.env.example)}
-      --external-ip=${TURN_EXTERNAL_IP:?zet TURN_EXTERNAL_IP in infra/.env (publiek[/privaat]-IP van de VM)}
-      --no-tls --no-dtls
+    # Lijstvorm (niet de gevouwen string): elk argument een apart token, geen leeg token meer.
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--no-cli"
+      - "--no-multicast-peers"
+      - "--listening-port=3478"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--realm=${TURN_REALM:-contactcenter}"
+      - "--use-auth-secret"
+      - "--static-auth-secret=${TURN_SECRET:?zet TURN_SECRET in infra/.env (zie infra/.env.example)}"
+      - "--external-ip=${TURN_EXTERNAL_IP:?zet TURN_EXTERNAL_IP in infra/.env (publiek[/privaat]-IP van de VM)}"
+      - "--no-tls"
+      - "--no-dtls"
 
   postgres:
     image: postgres:17
