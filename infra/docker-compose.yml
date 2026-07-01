@@ -17,6 +17,10 @@ services:
       # laten bij een opstelling zonder NAT. Vervangt de oude handmatige rtp.conf-edit op de VM.
       RTP_PRIVATE_IP: ${RTP_PRIVATE_IP:-}
       RTP_PUBLIC_IP: ${RTP_PUBLIC_IP:-}
+      # 5060-hardening (optioneel, defense-in-depth): comma-gescheiden CIDR-allowlist voor
+      # inkomende SIP. Leeg = geen ACL. Zet aan zodra WS via de reverse proxy loopt, bv.
+      # "127.0.0.1/8,172.16.0.0/24" (localhost voor de WS-agents + de VNet/SBC). Zie README.
+      SIP_ACL_PERMIT: ${SIP_ACL_PERMIT:-}
     volumes:
       # Gedeelde map met gegenereerde audio (TTS, eigen muziek); Asterisk speelt 'sound:custom/...'.
       - cc-sounds:/usr/share/asterisk/sounds/custom
