@@ -23,6 +23,13 @@ public sealed class AgentStateService(
     /// <summary>Niet-blokkerend signaal dat er werk te verdelen valt (geen await → geen lock-cykel).</summary>
     public Action? RequestDispatch { get; set; }
 
+    /// <summary>
+    /// Optionele push-callback: krijgt na elke status- of presence-wijziging de nieuwe snapshot,
+    /// zodat de agent-schermen live bijwerken zonder te pollen. Wordt fire-and-forget en buiten de
+    /// lock uitgevoerd (zie <see cref="EmitChanged"/>); null = geen push (bv. in tests).
+    /// </summary>
+    public Func<int, AgentSnapshot, Task>? AgentChanged { get; set; }
+
     /// <summary>Tenant-gekwalificeerde wachtrijsleutel zoals gebruikt voor reservering/dispatch.</summary>
     public static string QueueKey(int tenantId, string queueName) => $"{tenantId}:{queueName}";
 
@@ -91,8 +98,7 @@ public sealed class AgentStateService(
             if (!_loggedIn.Remove(AgentKey(tenantId, name), out var state))
                 return null;
             state.WrapUpTimer?.Cancel();
-            state.Status = AgentStatus.LoggedOut;
-            state.Since = DateTimeOffset.UtcNow;
+            SetStatus(state, AgentStatus.LoggedOut);
             logger.LogInformation("Agent {Agent} (tenant {Tenant}) uitgelogd", name, tenantId);
             return Snapshot(state);
         }
@@ -114,6 +120,7 @@ public sealed class AgentStateService(
             state.Presence = presence;
             state.Since = DateTimeOffset.UtcNow;
             logger.LogInformation("Agent {Agent} (tenant {Tenant}) presence → {Presence}", name, tenantId, presence);
+            EmitChanged(state);
             snapshot = Snapshot(state);
         }
         finally
@@ -358,6 +365,27 @@ public sealed class AgentStateService(
         state.Status = status;
         state.Since = DateTimeOffset.UtcNow;
         logger.LogInformation("Agent {Agent} → {Status}", state.Name, status);
+        EmitChanged(state);
+    }
+
+    /// <summary>
+    /// Duwt de huidige snapshot naar de <see cref="AgentChanged"/>-callback. Wordt aangeroepen terwijl
+    /// _gate vastgehouden wordt: de snapshot wordt daarom nú (consistent) gebouwd, maar de push zelf
+    /// draait op een achtergrond-taak — die raakt _gate niet aan, dus geen her-entry/deadlock en de
+    /// I/O blokkeert de statusmachine niet.
+    /// </summary>
+    private void EmitChanged(RuntimeState state)
+    {
+        var handler = AgentChanged;
+        if (handler is null)
+            return;
+        var tenantId = state.TenantId;
+        var snapshot = Snapshot(state);
+        _ = Task.Run(async () =>
+        {
+            try { await handler(tenantId, snapshot); }
+            catch (Exception ex) { logger.LogDebug("Agent-status pushen mislukt: {Reden}", ex.Message); }
+        });
     }
 
     private static AgentSnapshot Snapshot(RuntimeState state)

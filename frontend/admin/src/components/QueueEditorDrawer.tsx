@@ -14,7 +14,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+import { IconCopy, IconPlus, IconTrash, IconVolume } from '@tabler/icons-react';
 import {
   adminApi,
   type DayOfWeek,
@@ -59,6 +59,8 @@ const DAYS: { value: DayOfWeek; label: string }[] = [
   { value: 'Sunday', label: 'Zondag' },
 ];
 
+const WORKDAYS: DayOfWeek[] = ['Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
 const TIMEZONES = ['Europe/Amsterdam', 'Europe/Brussels', 'Europe/London', 'UTC', 'America/New_York'];
 
 // Moet overeenkomen met de klassen in musiconhold.conf op de Asterisk-host.
@@ -72,6 +74,68 @@ const VOICES = [
   { value: 'nl_BE-nathalie-medium', label: 'Nathalie (Vlaams)' },
   { value: 'nl_BE-rdh-medium', label: 'RDH (Vlaams)' },
 ];
+
+// Validatiepatronen — spiegelen de backend-regels (AdminApi.cs), zodat fouten al vóór het opslaan zichtbaar zijn.
+const NAME_RE = /^[a-z0-9]+$/;
+const NUMBER_RE = /^\+[0-9]{6,15}$/;
+const FORWARD_RE = /^\+?[0-9]{3,15}$/;
+
+interface FormErrors {
+  name?: string;
+  displayName?: string;
+  adHocForwardNumber?: string;
+  numbers: Map<number, string>; // index → fout
+  windows: Map<number, string>; // venster-id → fout
+  days: Map<DayOfWeek, string>; // dag → overlapfout
+  any: boolean;
+}
+
+function computeErrors(form: FormState, isNew: boolean): FormErrors {
+  const numbers = new Map<number, string>();
+  const windows = new Map<number, string>();
+  const days = new Map<DayOfWeek, string>();
+
+  let name: string | undefined;
+  if (isNew) {
+    if (!form.name.trim()) name = 'Verplicht.';
+    else if (!NAME_RE.test(form.name.trim())) name = 'Alleen kleine letters en cijfers.';
+  }
+
+  const displayName = form.displayName.trim() ? undefined : 'Verplicht.';
+
+  let adHocForwardNumber: string | undefined;
+  if (form.adHocClosed && form.adHocForwardNumber.trim() && !FORWARD_RE.test(form.adHocForwardNumber.trim()))
+    adHocForwardNumber = 'Ongeldig nummer.';
+
+  const seen = new Map<string, number>();
+  form.numbers.forEach((n, i) => {
+    const t = n.trim();
+    if (!t) return;
+    if (!NUMBER_RE.test(t)) numbers.set(i, 'Verwacht E.164, bv. +3120…');
+    else if (seen.has(t)) numbers.set(i, 'Dubbel nummer.');
+    else seen.set(t, i);
+  });
+
+  for (const w of form.windows)
+    if (w.opens >= w.closes) windows.set(w.id, 'Eindtijd moet ná de begintijd liggen.');
+
+  // Overlap per dag: sorteer de geldige vensters en kijk of het volgende vóór het einde van het vorige begint.
+  for (const d of DAYS) {
+    const dayWindows = form.windows
+      .filter((w) => w.day === d.value && w.opens < w.closes)
+      .sort((a, b) => a.opens.localeCompare(b.opens));
+    for (let i = 1; i < dayWindows.length; i++) {
+      if (dayWindows[i].opens < dayWindows[i - 1].closes) {
+        days.set(d.value, 'Vensters overlappen elkaar.');
+        break;
+      }
+    }
+  }
+
+  const any =
+    !!name || !!displayName || !!adHocForwardNumber || numbers.size > 0 || windows.size > 0 || days.size > 0;
+  return { name, displayName, adHocForwardNumber, numbers, windows, days, any };
+}
 
 let seq = 0;
 const nextId = () => ++seq;
@@ -120,6 +184,7 @@ function fromDetail(q: QueueDetail): FormState {
 export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState<'welcome' | 'closed' | null>(null);
   const isNew = target === 'new';
 
   // Formulier (re)initialiseren zodra een ander target geopend wordt — tijdens render op basis van
@@ -141,14 +206,51 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
   const removeWindow = (id: number) =>
     setForm((f) => (f ? { ...f, windows: f.windows.filter((w) => w.id !== id) } : f));
 
+  // Kopieert de maandag-vensters naar de overige werkdagen (di–vr); handig voor uniforme kantooruren.
+  const copyMondayToWorkdays = () =>
+    setForm((f) => {
+      if (!f) return f;
+      const monday = f.windows.filter((w) => w.day === 'Monday');
+      const kept = f.windows.filter((w) => !WORKDAYS.includes(w.day));
+      const copied = WORKDAYS.flatMap((day) =>
+        monday.map((w) => ({ id: nextId(), day, opens: w.opens, closes: w.closes })),
+      );
+      return { ...f, windows: [...kept, ...copied] };
+    });
+
   const setNumber = (i: number, value: string) =>
     setForm((f) => (f ? { ...f, numbers: f.numbers.map((n, j) => (j === i ? value : n)) } : f));
   const addNumber = () => setForm((f) => (f ? { ...f, numbers: [...f.numbers, ''] } : f));
   const removeNumber = (i: number) =>
     setForm((f) => (f ? { ...f, numbers: f.numbers.filter((_, j) => j !== i) } : f));
 
-  const save = async () => {
+  // Beluister de opgegeven tekst met de gekozen stem (zoals de beller het hoort).
+  const preview = async (which: 'welcome' | 'closed') => {
     if (!form) return;
+    const text = (which === 'welcome' ? form.welcomeText : form.closedText).trim();
+    if (!text) return;
+    setPreviewing(which);
+    try {
+      const blob = await adminApi.previewTts(text, form.voice);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.addEventListener('ended', () => URL.revokeObjectURL(url));
+      await audio.play();
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Voorbeeld mislukt',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setPreviewing(null);
+    }
+  };
+
+  const errors = form ? computeErrors(form, isNew) : null;
+
+  const save = async () => {
+    if (!form || (errors?.any ?? true)) return;
     setSaving(true);
     const body: QueueWriteRequest = {
       name: form.name.trim(),
@@ -184,6 +286,7 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
     form && !VOICES.some((v) => v.value === form.voice)
       ? [{ value: form.voice, label: form.voice }, ...VOICES]
       : VOICES;
+  const hasMonday = !!form && form.windows.some((w) => w.day === 'Monday');
 
   return (
     <Drawer
@@ -193,7 +296,7 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
       size="xl"
       title={isNew ? 'Nieuwe wachtrij' : `Wachtrij bewerken: ${form?.displayName ?? ''}`}
     >
-      {!form ? (
+      {!form || !errors ? (
         <Group justify="center" p="xl">
           <Loader />
         </Group>
@@ -205,30 +308,60 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
             placeholder="bijv. sales"
             value={form.name}
             disabled={!isNew}
+            error={errors.name}
             onChange={(e) => patch({ name: e.currentTarget.value })}
           />
           <TextInput
             label="Weergavenaam"
             withAsterisk
             value={form.displayName}
+            error={errors.displayName}
             onChange={(e) => patch({ displayName: e.currentTarget.value })}
           />
-          <Textarea
-            label="Welkomsttekst (gesproken)"
-            description="Wordt met TTS naar spraak omgezet. Leeg = standaardprompt."
-            autosize
-            minRows={2}
-            value={form.welcomeText}
-            onChange={(e) => patch({ welcomeText: e.currentTarget.value })}
-          />
-          <Textarea
-            label="Gesloten-tekst (gesproken)"
-            description="Afgespeeld buiten openingstijden. Leeg = standaardprompt."
-            autosize
-            minRows={2}
-            value={form.closedText}
-            onChange={(e) => patch({ closedText: e.currentTarget.value })}
-          />
+          <Stack gap={4}>
+            <Textarea
+              label="Welkomsttekst (gesproken)"
+              description="Wordt met TTS naar spraak omgezet. Leeg = standaardprompt."
+              autosize
+              minRows={2}
+              value={form.welcomeText}
+              onChange={(e) => patch({ welcomeText: e.currentTarget.value })}
+            />
+            <Group justify="flex-end">
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                leftSection={<IconVolume size={14} />}
+                disabled={!form.welcomeText.trim()}
+                loading={previewing === 'welcome'}
+                onClick={() => void preview('welcome')}
+              >
+                Beluister
+              </Button>
+            </Group>
+          </Stack>
+          <Stack gap={4}>
+            <Textarea
+              label="Gesloten-tekst (gesproken)"
+              description="Afgespeeld buiten openingstijden. Leeg = standaardprompt."
+              autosize
+              minRows={2}
+              value={form.closedText}
+              onChange={(e) => patch({ closedText: e.currentTarget.value })}
+            />
+            <Group justify="flex-end">
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                leftSection={<IconVolume size={14} />}
+                disabled={!form.closedText.trim()}
+                loading={previewing === 'closed'}
+                onClick={() => void preview('closed')}
+              >
+                Beluister
+              </Button>
+            </Group>
+          </Stack>
           <Group grow>
             <Select
               label="Stem"
@@ -266,14 +399,27 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
               description="Leeg laten = de gesloten-prompt afspelen; anders wordt hierheen doorgeschakeld."
               placeholder="+31..."
               value={form.adHocForwardNumber}
+              error={errors.adHocForwardNumber}
               onChange={(e) => patch({ adHocForwardNumber: e.currentTarget.value })}
             />
           )}
 
           <Divider label="Openingstijden" labelPosition="left" mt="sm" />
+          <Group>
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              leftSection={<IconCopy size={14} />}
+              disabled={!hasMonday}
+              onClick={copyMondayToWorkdays}
+            >
+              Maandag kopiëren naar werkdagen
+            </Button>
+          </Group>
           <Stack gap="xs">
             {DAYS.map((d) => {
               const dayWindows = form.windows.filter((w) => w.day === d.value);
+              const dayError = errors.days.get(d.value);
               return (
                 <Group key={d.value} align="flex-start" wrap="nowrap">
                   <Text w={90} pt={6} size="sm">
@@ -285,26 +431,43 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
                         Gesloten
                       </Text>
                     )}
-                    {dayWindows.map((w) => (
-                      <Group key={w.id} gap="xs" wrap="nowrap">
-                        <TextInput
-                          type="time"
-                          value={w.opens}
-                          onChange={(e) => updateWindow(w.id, { opens: e.currentTarget.value })}
-                          w={120}
-                        />
-                        <Text size="sm">–</Text>
-                        <TextInput
-                          type="time"
-                          value={w.closes}
-                          onChange={(e) => updateWindow(w.id, { closes: e.currentTarget.value })}
-                          w={120}
-                        />
-                        <ActionIcon variant="subtle" color="red" aria-label="Venster verwijderen" onClick={() => removeWindow(w.id)}>
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      </Group>
-                    ))}
+                    {dayWindows.map((w) => {
+                      const windowError = errors.windows.get(w.id);
+                      return (
+                        <Stack key={w.id} gap={2}>
+                          <Group gap="xs" wrap="nowrap">
+                            <TextInput
+                              type="time"
+                              value={w.opens}
+                              error={!!windowError}
+                              onChange={(e) => updateWindow(w.id, { opens: e.currentTarget.value })}
+                              w={120}
+                            />
+                            <Text size="sm">–</Text>
+                            <TextInput
+                              type="time"
+                              value={w.closes}
+                              error={!!windowError}
+                              onChange={(e) => updateWindow(w.id, { closes: e.currentTarget.value })}
+                              w={120}
+                            />
+                            <ActionIcon variant="subtle" color="red" aria-label="Venster verwijderen" onClick={() => removeWindow(w.id)}>
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Group>
+                          {windowError && (
+                            <Text c="red" size="xs">
+                              {windowError}
+                            </Text>
+                          )}
+                        </Stack>
+                      );
+                    })}
+                    {dayError && (
+                      <Text c="red" size="xs">
+                        {dayError}
+                      </Text>
+                    )}
                   </Stack>
                   <Button variant="subtle" size="compact-sm" leftSection={<IconPlus size={14} />} onClick={() => addWindow(d.value)}>
                     Venster
@@ -322,14 +485,15 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
               </Text>
             )}
             {form.numbers.map((n, i) => (
-              <Group key={i} gap="xs" wrap="nowrap">
+              <Group key={i} gap="xs" wrap="nowrap" align="flex-start">
                 <TextInput
                   placeholder="+31..."
                   value={n}
+                  error={errors.numbers.get(i)}
                   onChange={(e) => setNumber(i, e.currentTarget.value)}
                   style={{ flex: 1 }}
                 />
-                <ActionIcon variant="subtle" color="red" aria-label="Nummer verwijderen" onClick={() => removeNumber(i)}>
+                <ActionIcon mt={6} variant="subtle" color="red" aria-label="Nummer verwijderen" onClick={() => removeNumber(i)}>
                   <IconTrash size={16} />
                 </ActionIcon>
               </Group>
@@ -346,7 +510,7 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
             <Button variant="default" onClick={onClose}>
               Annuleren
             </Button>
-            <Button onClick={() => void save()} loading={saving}>
+            <Button onClick={() => void save()} loading={saving} disabled={errors.any}>
               Opslaan
             </Button>
           </Group>

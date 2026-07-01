@@ -191,6 +191,17 @@ public static partial class AdminApi
             var (dto, error) = await UpdateSettingsAsync(db, req, ct);
             return error is { } e ? Results.BadRequest(new { error = e }) : Results.Ok(dto);
         });
+
+        // TTS-voorbeeld: synthetiseer de opgegeven tekst en geef de audio terug (zoals de beller die hoort).
+        admin.MapPost("/tts/preview", async (TtsPreviewRequest req, ITtsService tts, CancellationToken ct) =>
+        {
+            if (!tts.IsEnabled)
+                return Results.Json(new { error = "TTS is niet beschikbaar op deze server." }, statusCode: 503);
+            var audio = await tts.SynthesizePreviewAsync(req.Text ?? "", req.Voice ?? "", ct);
+            return audio is null
+                ? Results.BadRequest(new { error = "Kon geen voorbeeld genereren (lege tekst of synthese-fout)." })
+                : Results.File(audio, "audio/wav");
+        });
     }
 
     // --- Testbare kernlogica ---------------------------------------------------
@@ -503,3 +514,5 @@ public sealed record ContactWriteRequest(string Name, string Number, string? Dep
 public sealed record SettingsDto(int WrapUpSeconds);
 
 public sealed record SettingsWriteRequest(int WrapUpSeconds);
+
+public sealed record TtsPreviewRequest(string? Text, string? Voice);

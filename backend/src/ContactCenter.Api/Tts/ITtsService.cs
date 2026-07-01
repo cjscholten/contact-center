@@ -24,4 +24,11 @@ public interface ITtsService
     /// dienst, lege tekst of een fout (de aanroeper valt dan terug op een standaardprompt).
     /// </summary>
     Task<bool> SynthesizeAsync(string text, string voice, string outputName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Genereert een tijdelijk 8kHz-mono-WAV (zoals de beller het hoort) en geeft de bytes terug,
+    /// voor een voorbeeld in de beheer-UI. Schrijft niets in de sounds-map. Null bij een
+    /// uitgeschakelde dienst, lege tekst of een fout.
+    /// </summary>
+    Task<byte[]?> SynthesizePreviewAsync(string text, string voice, CancellationToken ct = default);
 }

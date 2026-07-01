@@ -256,6 +256,11 @@ app.MapAdminApi();
 
 app.MapHub<ContactCenterHub>("/hub").RequireAuthorization();
 
+// Agent-status live naar de eigen schermen pushen (i.p.v. pollen): koppel de statusmachine aan de notifier.
+var agentState = app.Services.GetRequiredService<AgentStateService>();
+var realtimeNotifier = app.Services.GetRequiredService<IRealtimeNotifier>();
+agentState.AgentChanged = (tenantId, snapshot) => realtimeNotifier.AgentChangedAsync(tenantId, snapshot);
+
 await DatabaseInitializer.InitializeAsync(app.Services);
 await app.Services.GetRequiredService<ITenantRegistry>().ReloadAsync();
 
