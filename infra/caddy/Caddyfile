@@ -1,0 +1,28 @@
+# Reverse proxy + automatische Let's Encrypt-TLS voor de contact-center-stack.
+# Eén cert per subdomein (CC_DOMAIN uit infra/.env). Vereist DNS-A-records
+# api./auth./sip.<CC_DOMAIN> -> publiek IP van de VM, en NSG-poorten 80 + 443 open.
+{
+	email {$CADDY_ACME_EMAIL}
+}
+
+# Backend-API + SignalR-hub (wss gaat vanzelf mee via de WebSocket-upgrade).
+api.{$CC_DOMAIN} {
+	reverse_proxy localhost:5080
+}
+
+# Keycloak (OIDC). Caddy zet X-Forwarded-*; Keycloak bouwt hiermee https://auth.-URL's.
+auth.{$CC_DOMAIN} {
+	reverse_proxy localhost:8080
+}
+
+# Asterisk: ALLEEN het WebSocket-endpoint /ws (SIP.js) publiek maken — niet /ari,
+# dat blijft intern (localhost) voor de backend.
+sip.{$CC_DOMAIN} {
+	@ws path /ws /ws/*
+	handle @ws {
+		reverse_proxy localhost:8088
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

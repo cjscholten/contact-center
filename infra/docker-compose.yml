@@ -46,6 +46,22 @@ services:
       - "--no-tls"
       - "--no-dtls"
 
+  # Reverse proxy met automatische Let's Encrypt-TLS vóór backend/Keycloak/Asterisk-WS.
+  # Termineert https/wss op 443; DNS-A-records api./auth./sip.<CC_DOMAIN> -> VM-IP en
+  # NSG-poorten 80 + 443 zijn vereist voor de cert-uitgifte. Zie caddy/Caddyfile + README.
+  caddy:
+    image: caddy:2
+    container_name: cc-caddy
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      CC_DOMAIN: ${CC_DOMAIN:?zet CC_DOMAIN in infra/.env (bijv. zetadesk.net)}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?zet CADDY_ACME_EMAIL in infra/.env (Let's Encrypt-notificaties)}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
   postgres:
     image: postgres:17
     container_name: cc-postgres
@@ -72,6 +88,9 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
       KC_HOSTNAME_STRICT: "false"
+      # Vertrouw de X-Forwarded-*-headers van Caddy: de browser via de proxy krijgt https://auth.-URL's,
+      # interne backend-calls (localhost:8080, zonder die headers) blijven localhost (dynamic backchannel).
+      KC_PROXY_HEADERS: xforwarded
     volumes:
       # Alle realm-JSON's in de import-map worden bij --import-realm geladen: de default-tenant
       # (contactcenter) en de voorbeeld-tenant (tenant-acme). Extra klant-realms voeg je toe met
@@ -115,3 +134,5 @@ services:
 volumes:
   pgdata:
   cc-sounds:
+  caddy_data:
+  caddy_config:
