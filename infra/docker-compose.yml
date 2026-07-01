@@ -17,6 +17,23 @@ services:
       # Gedeelde map met gegenereerde audio (TTS, eigen muziek); Asterisk speelt 'sound:custom/...'.
       - cc-sounds:/usr/share/asterisk/sounds/custom
 
+  # TURN/STUN-server voor WebRTC-agents achter NAT (thuiswerkers). Host-netwerk zodat de
+  # relay-poorten direct bereikbaar zijn. Credentials zijn tijdelijk (use-auth-secret): de
+  # backend geeft ze uit uit hetzelfde TURN_SECRET, dus geen vaste creds in de browser.
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: cc-coturn
+    network_mode: host
+    restart: unless-stopped
+    command: >
+      -n --log-file=stdout --no-cli --no-multicast-peers
+      --listening-port=3478
+      --min-port=49160 --max-port=49200
+      --realm=${TURN_REALM:-contactcenter}
+      --use-auth-secret --static-auth-secret=${TURN_SECRET:?zet TURN_SECRET in infra/.env (zie infra/.env.example)}
+      --external-ip=${TURN_EXTERNAL_IP:?zet TURN_EXTERNAL_IP in infra/.env (publiek[/privaat]-IP van de VM)}
+      --no-tls --no-dtls
+
   postgres:
     image: postgres:17
     container_name: cc-postgres
@@ -72,6 +89,9 @@ services:
       # SIP-wachtwoord voor nieuw aangemaakte/geseede agents; moet gelijk zijn aan AGENT_SIP_PASSWORD
       # (pjsip.conf), zodat de browser-registratie klopt. Uit infra/.env.
       Agents__DefaultSipPassword: ${AGENT_SIP_PASSWORD}
+      # TURN: hetzelfde geheim als coturn (tijdelijke creds) + de publieke coturn-host voor de browser.
+      Turn__Secret: ${TURN_SECRET}
+      Turn__Host: ${TURN_PUBLIC_HOST:?zet TURN_PUBLIC_HOST in infra/.env (publieke coturn-IP voor de browser)}
       # Multi-tenant: de backend haalt de JWKS per realm op bij deze basis-URL (lokaal, via
       # network_mode host). De token-issuer mag een ander (publiek) IP zijn — die wordt op
       # realm-lidmaatschap gevalideerd, niet op exacte host.

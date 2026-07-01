@@ -8,7 +8,7 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'registered' | 'fa
 export interface Softphone {
   connectionState: ConnectionState;
   callState: CallState;
-  connect: (host: string, user: string, password: string) => Promise<void>;
+  connect: (host: string, user: string, password: string, iceServers?: RTCIceServer[]) => Promise<void>;
   disconnect: () => Promise<void>;
   answer: () => Promise<void>;
   hangup: () => Promise<void>;
@@ -21,14 +21,21 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
   const [callState, setCallState] = useState<CallState>('idle');
 
   const connect = useCallback(
-    async (host: string, user: string, password: string) => {
+    async (host: string, user: string, password: string, iceServers: RTCIceServer[] = []) => {
       const audio = audioRef.current;
       if (!audio) throw new Error('Audio-element niet beschikbaar');
 
       setConnectionState('connecting');
       const su = new Web.SimpleUser(`ws://${host}:8088/ws`, {
         aor: `sip:${user}@${host}`,
-        userAgentOptions: { authorizationUsername: user, authorizationPassword: password },
+        userAgentOptions: {
+          authorizationUsername: user,
+          authorizationPassword: password,
+          // TURN/STUN voor NAT-traversal (thuiswerkers); leeg = alleen host-kandidaten.
+          sessionDescriptionHandlerFactoryOptions: {
+            peerConnectionConfiguration: { iceServers },
+          },
+        },
         media: { remote: { audio } },
       });
       su.delegate = {

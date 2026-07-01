@@ -6,6 +6,7 @@ met `network_mode: host` (vermijdt NAT-problemen met SIP/RTP):
 | Service  | Poort | Wat |
 |----------|-------|-----|
 | asterisk | 5060/udp, 8088, 10000-10100/udp | Telefonie (PJSIP/ARI) |
+| coturn   | 3478/udp+tcp, 49160-49200/udp | TURN/STUN (WebRTC-relay voor thuiswerkers) |
 | postgres | 5432 | Database |
 | keycloak | 8080 | OIDC (zie `keycloak/README.md`) |
 | backend  | 5080 | .NET-API (ZetaDesk/ZetaBeheer) |
@@ -15,6 +16,10 @@ met `network_mode: host` (vermijdt NAT-problemen met SIP/RTP):
 Inbound toestaan: **5060/udp**, **8088**, **10000-10100/udp** (telefonie),
 **5432** (db, dev), **8080** (Keycloak), **5080** (backend). De trunk-leg vanaf de
 SBC loopt via `AllowVnetInBound`.
+
+Voor TURN (thuiswerkers) ook **3478/udp**, **3478/tcp** en de relay-range
+**49160-49200/udp** openzetten — vanaf de netwerken van de agents (thuis), dus in de
+praktijk breed (`Internet`) of per bekend agent-IP.
 
 ## Secrets (`infra/.env`)
 
@@ -58,6 +63,18 @@ VITE_API_BASE=http://20.107.0.204:5080
 
 De OIDC-authority en de Asterisk-host wijzen al naar de VM. CORS staat
 `localhost:5173/5174` toe.
+
+## TURN/STUN (coturn) voor thuiswerkers
+
+Browser-agents achter (symmetrische) NAT hebben een TURN-relay nodig voor de WebRTC-media.
+`coturn` draait als container op de VM (host-netwerk, publiek IP) met **use-auth-secret**:
+de backend geeft per agent een **tijdelijke** credential uit (username `vervaltijd:agent`,
+credential = HMAC-SHA1 over het gedeelde `TURN_SECRET`), via `GET /api/agents/me/ice`. De
+softphone geeft de teruggekregen `iceServers` door aan SIP.js. Zet in `infra/.env`:
+`TURN_SECRET`, `TURN_PUBLIC_HOST` (publiek IP voor de browser) en `TURN_EXTERNAL_IP`
+(`publiek/privaat`, want bij host-netwerk ziet coturn het privé-IP). Leeg `Turn:Secret`
+in de backend = TURN uit → terugval op host-kandidaten (lokaal netwerk werkt dan nog).
+TLS/`turns:` (poort 5349) is nog niet ingericht — hangt samen met de wss/TLS-stap.
 
 ## Gedeeld geluidsvolume
 
