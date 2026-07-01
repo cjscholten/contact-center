@@ -25,9 +25,10 @@ services:
     container_name: cc-coturn
     network_mode: host
     restart: unless-stopped
-    # Lijstvorm (niet de gevouwen string): elk argument een apart token, geen leeg token meer.
+    # Let op: geen '-n'. De coturn-entrypoint doet `eval echo <arg>` per argument; `echo -n`
+    # is de "geen-newline"-vlag en levert een leeg token op ("ERROR: Unknown argument:"). Er is
+    # toch geen turnserver.conf, dus '-n' (config-bestand overslaan) is overbodig.
     command:
-      - "-n"
       - "--log-file=stdout"
       - "--no-cli"
       - "--no-multicast-peers"
