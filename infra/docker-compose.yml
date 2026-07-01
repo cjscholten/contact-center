@@ -7,6 +7,12 @@ services:
     container_name: cc-asterisk
     network_mode: host
     restart: unless-stopped
+    environment:
+      # entrypoint.sh vult hiermee de config-sjablonen (ari.conf/pjsip.conf) in. Uit infra/.env.
+      ARI_PASSWORD: ${ARI_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
+      AGENT_SIP_PASSWORD: ${AGENT_SIP_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
+      # IP van het SBC-interface richting Asterisk (vervangt de oude handmatige sed in pjsip.conf).
+      SBC_IP: ${SBC_IP:?zet SBC_IP in infra/.env (zie infra/.env.example)}
     volumes:
       # Gedeelde map met gegenereerde audio (TTS, eigen muziek); Asterisk speelt 'sound:custom/...'.
       - cc-sounds:/usr/share/asterisk/sounds/custom
@@ -63,6 +69,9 @@ services:
       # uit appsettings.json (daar staan alleen secret-loze defaults). Env overschrijft die.
       ConnectionStrings__ContactCenter: "Host=localhost;Port=5432;Database=contactcenter;Username=cc;Password=${POSTGRES_PASSWORD}"
       Ari__Password: ${ARI_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
+      # SIP-wachtwoord voor nieuw aangemaakte/geseede agents; moet gelijk zijn aan AGENT_SIP_PASSWORD
+      # (pjsip.conf), zodat de browser-registratie klopt. Uit infra/.env.
+      Agents__DefaultSipPassword: ${AGENT_SIP_PASSWORD}
       # Multi-tenant: de backend haalt de JWKS per realm op bij deze basis-URL (lokaal, via
       # network_mode host). De token-issuer mag een ander (publiek) IP zijn — die wordt op
       # realm-lidmaatschap gevalideerd, niet op exacte host.

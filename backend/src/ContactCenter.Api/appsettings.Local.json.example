@@ -5,5 +5,8 @@
   },
   "Ari": {
     "Password": "changeme-dev"
+  },
+  "Agents": {
+    "DefaultSipPassword": "changeme-dev"
   }
 }

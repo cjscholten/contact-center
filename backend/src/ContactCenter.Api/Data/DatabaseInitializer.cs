@@ -1,5 +1,6 @@
 using ContactCenter.Api.Tts;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace ContactCenter.Api.Data;
 
@@ -13,6 +14,8 @@ public static class DatabaseInitializer
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseInitializer");
         var dbFactory = services.GetRequiredService<IDbContextFactory<CcDbContext>>();
         var tts = services.GetRequiredService<ITtsService>();
+        // SIP-wachtwoord voor geseede agents uit config (env Agents__DefaultSipPassword); niet in git.
+        var defaultSipPassword = services.GetRequiredService<IConfiguration>()["Agents:DefaultSipPassword"] ?? "";
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -20,7 +23,7 @@ public static class DatabaseInitializer
             {
                 await using var db = await dbFactory.CreateDbContextAsync();
                 await db.Database.MigrateAsync();
-                await SeedAsync(db, logger);
+                await SeedAsync(db, logger, defaultSipPassword);
                 await RegeneratePromptsAsync(db, tts, logger);
                 logger.LogInformation("Database gemigreerd en gereed");
                 return;
@@ -41,13 +44,13 @@ public static class DatabaseInitializer
 
     // De seed draait zonder tenant-context, dus de tenant-query-filter zou alles wegfilteren:
     // overal IgnoreQueryFilters() en TenantId expliciet zetten.
-    private static async Task SeedAsync(CcDbContext db, ILogger logger)
+    private static async Task SeedAsync(CcDbContext db, ILogger logger, string sipPassword)
     {
         var defaultTenant = await EnsureTenantAsync(db, "default", "Standaard", "contactcenter", logger);
         var acmeTenant = await EnsureTenantAsync(db, "acme", "Acme BV", "tenant-acme", logger);
 
-        await SeedDefaultTenantAsync(db, defaultTenant.Id, logger);
-        await SeedAcmeTenantAsync(db, acmeTenant.Id, logger);
+        await SeedDefaultTenantAsync(db, defaultTenant.Id, logger, sipPassword);
+        await SeedAcmeTenantAsync(db, acmeTenant.Id, logger, sipPassword);
     }
 
     private static async Task<Tenant> EnsureTenantAsync(
@@ -64,7 +67,7 @@ public static class DatabaseInitializer
         return tenant;
     }
 
-    private static async Task SeedDefaultTenantAsync(CcDbContext db, int tenantId, ILogger logger)
+    private static async Task SeedDefaultTenantAsync(CcDbContext db, int tenantId, ILogger logger, string sipPassword)
     {
         if (!await db.Queues.IgnoreQueryFilters().AnyAsync(q => q.TenantId == tenantId))
         {
@@ -94,6 +97,7 @@ public static class DatabaseInitializer
                     Name = "agent1001",
                     DisplayName = "Agent 1001",
                     Endpoint = "PJSIP/agent1001",
+                    SipPassword = sipPassword,
                     QueueAssignments = [.. queueIds.Values.Select(id => new AgentQueueAssignment { QueueConfigId = id })],
                 },
                 new Agent
@@ -102,6 +106,7 @@ public static class DatabaseInitializer
                     Name = "agent1002",
                     DisplayName = "Agent 1002",
                     Endpoint = "PJSIP/agent1002",
+                    SipPassword = sipPassword,
                     QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueIds["support"] }],
                 });
             await db.SaveChangesAsync();
@@ -123,7 +128,7 @@ public static class DatabaseInitializer
 
     // Tweede voorbeeld-tenant zodat multi-tenant zichtbaar/testbaar is: eigen queue, eigen DID en
     // een agent met genamespacede SIP-endpoint (Asterisk-breed uniek).
-    private static async Task SeedAcmeTenantAsync(CcDbContext db, int tenantId, ILogger logger)
+    private static async Task SeedAcmeTenantAsync(CcDbContext db, int tenantId, ILogger logger, string sipPassword)
     {
         if (!await db.Queues.IgnoreQueryFilters().AnyAsync(q => q.TenantId == tenantId))
         {
@@ -151,6 +156,7 @@ public static class DatabaseInitializer
                 Name = "agent2001",
                 DisplayName = "Acme Agent 2001",
                 Endpoint = "PJSIP/acme-agent2001",
+                SipPassword = sipPassword,
                 QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueId }],
             });
             await db.SaveChangesAsync();
