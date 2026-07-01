@@ -13,6 +13,10 @@ services:
       AGENT_SIP_PASSWORD: ${AGENT_SIP_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
       # IP van het SBC-interface richting Asterisk (vervangt de oude handmatige sed in pjsip.conf).
       SBC_IP: ${SBC_IP:?zet SBC_IP in infra/.env (zie infra/.env.example)}
+      # ICE-NAT-mapping voor WebRTC (rtp.conf): privé => publiek IP van de VM. Optioneel — leeg
+      # laten bij een opstelling zonder NAT. Vervangt de oude handmatige rtp.conf-edit op de VM.
+      RTP_PRIVATE_IP: ${RTP_PRIVATE_IP:-}
+      RTP_PUBLIC_IP: ${RTP_PUBLIC_IP:-}
     volumes:
       # Gedeelde map met gegenereerde audio (TTS, eigen muziek); Asterisk speelt 'sound:custom/...'.
       - cc-sounds:/usr/share/asterisk/sounds/custom
