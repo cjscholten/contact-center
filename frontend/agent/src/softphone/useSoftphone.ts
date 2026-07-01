@@ -12,13 +12,40 @@ export interface Softphone {
   disconnect: () => Promise<void>;
   answer: () => Promise<void>;
   hangup: () => Promise<void>;
+  /** Neemt het eerstvolgende inkomende gesprek automatisch op (voor een eigen pickup). */
+  armAutoAnswer: () => void;
+  /** Annuleert een openstaande auto-answer (bv. als de pickup mislukte). */
+  disarmAutoAnswer: () => void;
 }
+
+// Als er na een pickup binnen dit venster geen gesprek binnenkomt, vervalt de auto-answer weer —
+// zodat een later, los inkomend gesprek niet per ongeluk automatisch wordt opgenomen.
+const AUTO_ANSWER_WINDOW_MS = 15_000;
 
 /** Beheert de SIP.js SimpleUser (WebRTC-registratie + gesprek) en de beltoon. */
 export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Softphone {
   const userRef = useRef<Web.SimpleUser | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [callState, setCallState] = useState<CallState>('idle');
+  const autoAnswerRef = useRef(false);
+  const autoAnswerTimerRef = useRef<number | null>(null);
+
+  const disarmAutoAnswer = useCallback(() => {
+    autoAnswerRef.current = false;
+    if (autoAnswerTimerRef.current !== null) {
+      clearTimeout(autoAnswerTimerRef.current);
+      autoAnswerTimerRef.current = null;
+    }
+  }, []);
+
+  const armAutoAnswer = useCallback(() => {
+    autoAnswerRef.current = true;
+    if (autoAnswerTimerRef.current !== null) clearTimeout(autoAnswerTimerRef.current);
+    autoAnswerTimerRef.current = window.setTimeout(() => {
+      autoAnswerRef.current = false;
+      autoAnswerTimerRef.current = null;
+    }, AUTO_ANSWER_WINDOW_MS);
+  }, []);
 
   const connect = useCallback(
     async (wsUrl: string, user: string, password: string, iceServers: RTCIceServer[] = []) => {
@@ -42,6 +69,11 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
       });
       su.delegate = {
         onCallReceived: () => {
+          if (autoAnswerRef.current) {
+            disarmAutoAnswer();
+            void su.answer(); // eigen pickup: direct opnemen, geen beltoon (onCallAnswered zet in_call)
+            return;
+          }
           setCallState('ringing');
           startRinging();
         },
@@ -66,11 +98,12 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
         throw e;
       }
     },
-    [audioRef],
+    [audioRef, disarmAutoAnswer],
   );
 
   const disconnect = useCallback(async () => {
     stopRinging();
+    disarmAutoAnswer();
     const su = userRef.current;
     userRef.current = null;
     setCallState('idle');
@@ -79,7 +112,7 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
       try { await su.unregister(); } catch { /* verbinding mogelijk al weg */ }
       try { await su.disconnect(); } catch { /* idem */ }
     }
-  }, []);
+  }, [disarmAutoAnswer]);
 
   const answer = useCallback(async () => {
     await userRef.current?.answer();
@@ -89,5 +122,5 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
     await userRef.current?.hangup();
   }, []);
 
-  return { connectionState, callState, connect, disconnect, answer, hangup };
+  return { connectionState, callState, connect, disconnect, answer, hangup, armAutoAnswer, disarmAutoAnswer };
 }

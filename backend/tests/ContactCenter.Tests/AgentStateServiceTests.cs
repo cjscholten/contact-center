@@ -163,4 +163,51 @@ public class AgentStateServiceTests
 
         Assert.Null(await sut.TryReserveSpecificAsync(T, "agent1001"));
     }
+
+    [Fact]
+    public async Task Presence_wijziging_pusht_de_nieuwe_snapshot()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        var pushes = new List<AgentSnapshot>();
+        var gate = new SemaphoreSlim(0);
+        sut.AgentChanged = (_, snap) =>
+        {
+            lock (pushes) pushes.Add(snap);
+            gate.Release();
+            return Task.CompletedTask;
+        };
+        await sut.LoginAsync(T, "agent1001");
+
+        await sut.SetPresenceAsync(T, "agent1001", Presence.Break);
+
+        // De push is fire-and-forget (achtergrond-taak); wacht kort tot die binnen is.
+        Assert.True(await gate.WaitAsync(TimeSpan.FromSeconds(2)));
+        AgentSnapshot last;
+        lock (pushes) last = pushes[^1];
+        Assert.Equal(Presence.Break, last.Presence);
+    }
+
+    [Fact]
+    public async Task Statusovergang_pusht_de_nieuwe_snapshot()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]));
+        var sut = Build(factory);
+        var gate = new SemaphoreSlim(0);
+        AgentStatus? pushedStatus = null;
+        sut.AgentChanged = (_, snap) =>
+        {
+            pushedStatus = snap.Status;
+            gate.Release();
+            return Task.CompletedTask;
+        };
+        await sut.LoginAsync(T, "agent1001");
+
+        await sut.TryReserveSpecificAsync(T, "agent1001"); // → Ringing
+
+        Assert.True(await gate.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal(AgentStatus.Ringing, pushedStatus);
+    }
 }

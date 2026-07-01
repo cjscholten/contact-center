@@ -3,7 +3,6 @@ import { notifications } from '@mantine/notifications';
 import { useAuth } from 'react-oidc-context';
 import { AuthErrorScreen, LoadingScreen, LoginScreen, setAccessToken } from '@zeta/ui';
 import { useSoftphone } from './softphone/useSoftphone';
-import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
 import { agentApi, type DirectoryEntry, type Presence } from './api/agentApi';
 import { sipWsUrl } from './config';
@@ -21,8 +20,7 @@ export default function App() {
   const [onHold, setOnHold] = useState(false);
   const [consultWith, setConsultWith] = useState<string | null>(null);
   const startedRef = useRef(false);
-  const snapshot = useAgentSnapshot(agentName);
-  const { waiting } = useContactCenterHub(agentName !== null);
+  const { waiting, agentSnapshot: snapshot } = useContactCenterHub(agentName);
 
   // Het access-token beschikbaar maken voor de fetch-wrappers + SignalR.
   useEffect(() => {
@@ -99,9 +97,11 @@ export default function App() {
 
   const pickup = async (callId: string) => {
     if (!agentName) return;
+    sp.armAutoAnswer(); // de inkomende leg van déze pickup direct opnemen (één klik)
     try {
       await agentApi.pickup(agentName, callId);
     } catch {
+      sp.disarmAutoAnswer(); // pickup mislukt: geen automatische opname
       notifications.show({
         color: 'yellow',
         title: 'Aannemen niet gelukt',

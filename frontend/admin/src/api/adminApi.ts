@@ -128,4 +128,22 @@ export const adminApi = {
 
   getSettings: () => http<Settings>('settings'),
   updateSettings: (s: Settings) => http<Settings>('settings', { method: 'PUT', body: JSON.stringify(s) }),
+
+  // TTS-voorbeeld: geeft de gesynthetiseerde audio (WAV) terug om te beluisteren.
+  async previewTts(text: string, voice: string): Promise<Blob> {
+    const res = await fetch(`${apiBase}/api/admin/tts/preview`, {
+      method: 'POST',
+      headers: { ...authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice }),
+    });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body?.error) message = body.error;
+      } catch { /* geen JSON-body */ }
+      throw new Error(message);
+    }
+    return res.blob();
+  },
 };

@@ -85,6 +85,40 @@ public sealed class PiperTtsService : ITtsService
         }
     }
 
+    public async Task<byte[]?> SynthesizePreviewAsync(string text, string voice, CancellationToken ct = default)
+    {
+        if (!IsEnabled || string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var chosen = AvailableVoices.Contains(voice) ? voice : DefaultVoice;
+        var modelPath = Path.Combine(_voicesDir, $"{chosen}.onnx");
+        if (!File.Exists(modelPath))
+        {
+            _logger.LogWarning("TTS-stem '{Voice}' niet gevonden ({Path})", chosen, modelPath);
+            return null;
+        }
+
+        // Beide bestanden in de temp-map: een voorbeeld hoeft niet in de gedeelde sounds-map te landen.
+        var rawWav = Path.Combine(Path.GetTempPath(), $"tts-preview-{Guid.NewGuid():N}.wav");
+        var finalWav = Path.Combine(Path.GetTempPath(), $"tts-preview-{Guid.NewGuid():N}-8k.wav");
+        try
+        {
+            if (!await RunPiperAsync(text, modelPath, rawWav, ct)) return null;
+            if (!await RunSoxAsync(rawWav, finalWav, ct)) return null;
+            return await File.ReadAllBytesAsync(finalWav, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "TTS-voorbeeld genereren mislukt (stem {Voice})", chosen);
+            return null;
+        }
+        finally
+        {
+            try { if (File.Exists(rawWav)) File.Delete(rawWav); } catch { /* best effort */ }
+            try { if (File.Exists(finalWav)) File.Delete(finalWav); } catch { /* best effort */ }
+        }
+    }
+
     private Task<bool> RunPiperAsync(string text, string modelPath, string outputWav, CancellationToken ct)
     {
         var psi = new ProcessStartInfo

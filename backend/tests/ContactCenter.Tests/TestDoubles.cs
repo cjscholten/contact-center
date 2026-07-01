@@ -1,3 +1,4 @@
+using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
 using ContactCenter.Api.Auth;
 using ContactCenter.Api.CallFlow;
@@ -8,14 +9,21 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ContactCenter.Tests;
 
-/// <summary>Vangt de wachtrij-pushes (per tenant) op zodat tests ze kunnen inspecteren.</summary>
+/// <summary>Vangt de wachtrij- en agent-pushes (per tenant) op zodat tests ze kunnen inspecteren.</summary>
 public sealed class FakeRealtimeNotifier : IRealtimeNotifier
 {
     public List<(int TenantId, IReadOnlyList<WaitingCallView> Waiting)> QueuePushes { get; } = [];
+    public List<(int TenantId, AgentSnapshot Snapshot)> AgentPushes { get; } = [];
 
     public Task QueuesChangedAsync(int tenantId, IReadOnlyList<WaitingCallView> waiting, CancellationToken ct = default)
     {
         QueuePushes.Add((tenantId, waiting));
+        return Task.CompletedTask;
+    }
+
+    public Task AgentChangedAsync(int tenantId, AgentSnapshot snapshot, CancellationToken ct = default)
+    {
+        AgentPushes.Add((tenantId, snapshot));
         return Task.CompletedTask;
     }
 }
@@ -159,4 +167,7 @@ public sealed class FakeTtsService : ITtsService
         if (ok) _existing.Add(outputName);
         return Task.FromResult(ok);
     }
+
+    public Task<byte[]?> SynthesizePreviewAsync(string text, string voice, CancellationToken ct = default)
+        => Task.FromResult<byte[]?>(Enabled && Succeed && !string.IsNullOrWhiteSpace(text) ? [1, 2, 3] : null);
 }

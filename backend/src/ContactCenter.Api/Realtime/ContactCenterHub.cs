@@ -19,7 +19,13 @@ public sealed class ContactCenterHub(ITenantRegistry registry) : Hub
             .FirstOrDefault(i => KeycloakRealmKeys.RealmFromIssuer(i) is not null);
         var realm = KeycloakRealmKeys.RealmFromIssuer(issuer);
         if (realm is not null && registry.TryGetByRealm(realm, out var tenant))
+        {
             await Groups.AddToGroupAsync(Context.ConnectionId, TenantGroups.For(tenant.Id));
+            // Persoonlijke groep voor status-updates: alleen déze agent hoort zijn eigen wijzigingen.
+            var username = Context.User?.Identity?.Name;
+            if (!string.IsNullOrEmpty(username))
+                await Groups.AddToGroupAsync(Context.ConnectionId, TenantGroups.ForAgent(tenant.Id, username));
+        }
 
         await base.OnConnectedAsync();
     }
