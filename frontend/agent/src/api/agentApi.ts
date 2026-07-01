@@ -42,6 +42,18 @@ export const agentApi = {
     if (!response.ok) throw new Error(`SIP-gegevens ophalen mislukt: HTTP ${response.status}`);
     return response.json() as Promise<{ username: string; password: string }>;
   },
+  // ICE-servers (STUN/TURN) voor de WebRTC-registratie. Lege lijst wanneer TURN uit staat of het
+  // ophalen mislukt — de softphone valt dan terug op host-kandidaten (lokaal netwerk werkt nog).
+  async getIceServers(): Promise<RTCIceServer[]> {
+    try {
+      const response = await fetch(`${apiBase}/api/agents/me/ice`, { headers: authHeader() });
+      if (!response.ok) return [];
+      const data = (await response.json()) as { iceServers?: RTCIceServer[] };
+      return data.iceServers ?? [];
+    } catch {
+      return [];
+    }
+  },
   login: (name: string) => send(name, 'login'),
   logout: (name: string) => send(name, 'logout'),
   finishWrapUp: (name: string) => send(name, 'wrapup/finish'),

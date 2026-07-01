@@ -11,6 +11,7 @@ using ContactCenter.Api.Data;
 using ContactCenter.Api.Directory;
 using ContactCenter.Api.Realtime;
 using ContactCenter.Api.Tts;
+using ContactCenter.Api.Turn;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,9 @@ if (!string.IsNullOrWhiteSpace(vmHost))
 {
     builder.Configuration["Ari:BaseUrl"] = $"http://{vmHost}:8088/ari/";
     builder.Configuration["Keycloak:BaseUrl"] = $"http://{vmHost}:8080";
+    // coturn draait op de VM; vul de TURN-host in tenzij expliciet gezet (bv. in appsettings.Local.json).
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Turn:Host"]))
+        builder.Configuration["Turn:Host"] = vmHost;
 }
 
 builder.Services.AddOptions<AriOptions>()
@@ -49,6 +53,11 @@ builder.Services.AddHttpClient<AriHttpClient>((sp, http) =>
     http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 });
 builder.Services.AddSingleton<IAriClient>(sp => sp.GetRequiredService<AriHttpClient>());
+
+// TURN/STUN voor WebRTC-agents achter NAT (coturn). Leeg geheim = uit (terugval op host-kandidaten).
+builder.Services.AddOptions<TurnOptions>().Bind(builder.Configuration.GetSection(TurnOptions.SectionName));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<TurnCredentialService>();
 
 var connectionString = builder.Configuration.GetConnectionString("ContactCenter");
 if (!string.IsNullOrWhiteSpace(vmHost))
@@ -171,6 +180,16 @@ agents.MapGet("/me/sip", async (HttpContext http, IDbContextFactory<CcDbContext>
     return agent is null
         ? Results.NotFound()
         : Results.Ok(new { username = agent.Name, password = agent.SipPassword });
+});
+
+// ICE-servers (STUN/TURN) voor de WebRTC-registratie van de ingelogde agent. Leeg wanneer TURN
+// niet is geconfigureerd; de credentials zijn tijdelijk (per agent, uit het gedeelde geheim).
+agents.MapGet("/me/ice", (HttpContext http, TurnCredentialService turn) =>
+{
+    var user = http.User.Identity?.Name;
+    return string.IsNullOrEmpty(user)
+        ? Results.Unauthorized()
+        : Results.Ok(new { iceServers = turn.GetIceServers(user) });
 });
 
 agents.MapGet("/{name}", async (string name, AgentStateService svc, ITenantAccessor tenant, CancellationToken ct)

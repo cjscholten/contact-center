@@ -8,5 +8,8 @@
   },
   "Agents": {
     "DefaultSipPassword": "changeme-dev"
+  },
+  "Turn": {
+    "Secret": "changeme-dev-turn"
   }
 }

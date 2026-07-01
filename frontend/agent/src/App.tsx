@@ -53,7 +53,8 @@ export default function App() {
     void (async () => {
       try {
         const sip = await agentApi.getSipCredentials();
-        await sp.connect(asteriskHost, sip.username, sip.password);
+        const iceServers = await agentApi.getIceServers();
+        await sp.connect(asteriskHost, sip.username, sip.password, iceServers);
         await agentApi.login(username);
         setAgentName(username);
       } catch (e) {
