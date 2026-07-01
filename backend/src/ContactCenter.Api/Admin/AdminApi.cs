@@ -106,10 +106,10 @@ public static partial class AdminApi
             return a is null ? Results.NotFound() : Results.Ok(ToAgentDetail(a));
         });
 
-        agents.MapPost("", async (AgentWriteRequest req, IDbContextFactory<CcDbContext> factory, CancellationToken ct) =>
+        agents.MapPost("", async (AgentWriteRequest req, IDbContextFactory<CcDbContext> factory, IConfiguration config, CancellationToken ct) =>
         {
             await using var db = await factory.CreateDbContextAsync(ct);
-            var result = await CreateAgentAsync(db, req, ct);
+            var result = await CreateAgentAsync(db, req, config["Agents:DefaultSipPassword"] ?? "", ct);
             return result.Error is { } error
                 ? Results.BadRequest(new { error })
                 : Results.Created($"/api/admin/agents/{result.Detail!.Id}", result.Detail);
@@ -234,7 +234,7 @@ public static partial class AdminApi
 
     // --- Agents ----------------------------------------------------------------
 
-    public static async Task<AgentResult> CreateAgentAsync(CcDbContext db, AgentWriteRequest req, CancellationToken ct = default)
+    public static async Task<AgentResult> CreateAgentAsync(CcDbContext db, AgentWriteRequest req, string sipPassword = "", CancellationToken ct = default)
     {
         var name = req.Name.Trim();
         if (!AgentNameRegex().IsMatch(name))
@@ -244,7 +244,14 @@ public static partial class AdminApi
         if (await ValidateAgentAsync(db, req, ct) is { } error)
             return AgentResult.Fail(error);
 
-        var agent = new Agent { TenantId = db.CurrentTenantId, Name = name, DisplayName = req.DisplayName.Trim(), Endpoint = req.Endpoint.Trim() };
+        var agent = new Agent
+        {
+            TenantId = db.CurrentTenantId,
+            Name = name,
+            DisplayName = req.DisplayName.Trim(),
+            Endpoint = req.Endpoint.Trim(),
+            SipPassword = sipPassword,
+        };
         ApplyAgentQueues(agent, req.QueueIds);
         db.Agents.Add(agent);
         await db.SaveChangesAsync(ct);

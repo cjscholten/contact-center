@@ -16,8 +16,9 @@ public class Agent
     public required string Endpoint { get; set; }
 
     /// <summary>SIP-wachtwoord voor de WebRTC-registratie; uitgegeven via /api/agents/me/sip
-    /// na Keycloak-login. Dev: gelijk aan de waarde in pjsip.conf.</summary>
-    public string SipPassword { get; set; } = "changeme-dev";
+    /// na Keycloak-login. Wordt bij seed/aanmaak gezet uit config 'Agents:DefaultSipPassword'
+    /// (env, gelijk aan AGENT_SIP_PASSWORD in pjsip.conf). Niet hardcoden — geen secret in git.</summary>
+    public string SipPassword { get; set; } = "";
 
     public List<AgentQueueAssignment> QueueAssignments { get; set; } = [];
 }

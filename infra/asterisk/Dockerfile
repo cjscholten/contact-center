@@ -7,9 +7,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         asterisk-core-sounds-en-gsm \
         asterisk-moh-opsound-gsm \
         sox \
+        gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
+# Statische configs direct; de getemplatete (ari.conf, pjsip.conf) komen als sjabloon binnen
+# en worden bij container-start door entrypoint.sh ingevuld met secrets uit de omgeving.
 COPY conf/*.conf /etc/asterisk/
+COPY templates/ /etc/asterisk/templates/
+COPY entrypoint.sh /usr/local/bin/cc-entrypoint.sh
+RUN chmod +x /usr/local/bin/cc-entrypoint.sh
 
 # Demo-wachtmuziekklasse 'office' (rechtenvrij, met sox gegenereerd) zodat wachtmuziek
 # per wachtrij meteen aantoonbaar is. De pakket-[default]-klasse (opsound) blijft staan;
@@ -22,4 +28,5 @@ RUN mkdir -p /var/lib/asterisk/moh-office \
 
 EXPOSE 5060/udp 8088/tcp 10000-10100/udp
 
+ENTRYPOINT ["/usr/local/bin/cc-entrypoint.sh"]
 CMD ["asterisk", "-f", "-vvv"]
