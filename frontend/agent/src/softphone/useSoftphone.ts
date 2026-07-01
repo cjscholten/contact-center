@@ -8,7 +8,7 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'registered' | 'fa
 export interface Softphone {
   connectionState: ConnectionState;
   callState: CallState;
-  connect: (host: string, user: string, password: string, iceServers?: RTCIceServer[]) => Promise<void>;
+  connect: (wsUrl: string, user: string, password: string, iceServers?: RTCIceServer[]) => Promise<void>;
   disconnect: () => Promise<void>;
   answer: () => Promise<void>;
   hangup: () => Promise<void>;
@@ -21,13 +21,15 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
   const [callState, setCallState] = useState<CallState>('idle');
 
   const connect = useCallback(
-    async (host: string, user: string, password: string, iceServers: RTCIceServer[] = []) => {
+    async (wsUrl: string, user: string, password: string, iceServers: RTCIceServer[] = []) => {
       const audio = audioRef.current;
       if (!audio) throw new Error('Audio-element niet beschikbaar');
 
+      // SIP-domein (aor) uit de WS-URL halen, zodat het klopt met de host achter ws:// of wss://.
+      const sipHost = new URL(wsUrl).hostname;
       setConnectionState('connecting');
-      const su = new Web.SimpleUser(`ws://${host}:8088/ws`, {
-        aor: `sip:${user}@${host}`,
+      const su = new Web.SimpleUser(wsUrl, {
+        aor: `sip:${user}@${sipHost}`,
         userAgentOptions: {
           authorizationUsername: user,
           authorizationPassword: password,

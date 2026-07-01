@@ -5,6 +5,7 @@ met `network_mode: host` (vermijdt NAT-problemen met SIP/RTP):
 
 | Service  | Poort | Wat |
 |----------|-------|-----|
+| caddy    | 80, 443 | Reverse proxy + Let's Encrypt-TLS (https/wss) |
 | asterisk | 5060/udp, 8088, 10000-10100/udp | Telefonie (PJSIP/ARI) |
 | coturn   | 3478/udp+tcp, 49160-49200/udp | TURN/STUN (WebRTC-relay voor thuiswerkers) |
 | postgres | 5432 | Database |
@@ -20,6 +21,35 @@ SBC loopt via `AllowVnetInBound`.
 Voor TURN (thuiswerkers) ook **3478/udp**, **3478/tcp** en de relay-range
 **49160-49200/udp** openzetten — vanaf de netwerken van de agents (thuis), dus in de
 praktijk breed (`Internet`) of per bekend agent-IP.
+
+Voor TLS (Caddy) **80/tcp** + **443/tcp** open vanaf `Internet` (80 is nodig voor de
+Let's Encrypt-validatie). Als alles via Caddy loopt, kunnen de directe HTTP-poorten
+(**5080**, **8080**) van internet worden dichtgezet — de backend praat intern via localhost.
+
+## TLS / reverse proxy (Caddy)
+
+`caddy` termineert TLS voor alle browser-verkeer en regelt automatisch Let's Encrypt-certs
+per subdomein (zie `caddy/Caddyfile`). Routing (host-based):
+
+| Subdomein | → intern | wss |
+|-----------|----------|-----|
+| `api.<CC_DOMAIN>`  | backend `:5080` (incl. SignalR `/hub`) | ✅ |
+| `auth.<CC_DOMAIN>` | Keycloak `:8080` | — |
+| `sip.<CC_DOMAIN>`  | Asterisk `:8088` — alléén `/ws` (SIP.js), niet `/ari` | ✅ |
+
+**Vereisten vóór de eerste deploy met TLS:**
+1. **DNS**: A-records `api.<CC_DOMAIN>`, `auth.<CC_DOMAIN>`, `sip.<CC_DOMAIN>` → het publieke VM-IP.
+2. **NSG**: 80 + 443 open (zie boven).
+3. **`infra/.env`**: `CC_DOMAIN` en `CADDY_ACME_EMAIL` gezet.
+
+Keycloak staat achter de proxy via `KC_PROXY_HEADERS=xforwarded`: de browser (via Caddy)
+krijgt `https://auth.<CC_DOMAIN>`-URL's, terwijl de backend Keycloak intern op `localhost:8080`
+blijft benaderen (dynamic backchannel) — dus `Keycloak:BaseUrl` blijft `http://localhost:8080`.
+
+**Front-ends** wijzen dan naar de https/wss-URL's (in `frontend/{agent,admin}/.env.local`):
+`VITE_API_BASE=https://api.<CC_DOMAIN>`, `VITE_KEYCLOAK_BASE=https://auth.<CC_DOMAIN>`,
+`VITE_SIP_WS_URL=wss://sip.<CC_DOMAIN>/ws`. Voeg hun redirect-URI's toe aan de realm-clients.
+Certs overleven herstarts via het named volume `caddy_data`.
 
 ## Secrets (`infra/.env`)
 

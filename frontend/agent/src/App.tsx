@@ -6,7 +6,7 @@ import { useSoftphone } from './softphone/useSoftphone';
 import { useAgentSnapshot } from './agent/useAgentSnapshot';
 import { useContactCenterHub } from './realtime/useContactCenterHub';
 import { agentApi, type DirectoryEntry, type Presence } from './api/agentApi';
-import { asteriskHost } from './config';
+import { sipWsUrl } from './config';
 import { ZetaDeskShell } from './components/ZetaDeskShell';
 
 function fail(title: string, e: unknown): void {
@@ -54,7 +54,7 @@ export default function App() {
       try {
         const sip = await agentApi.getSipCredentials();
         const iceServers = await agentApi.getIceServers();
-        await sp.connect(asteriskHost, sip.username, sip.password, iceServers);
+        await sp.connect(sipWsUrl, sip.username, sip.password, iceServers);
         await agentApi.login(username);
         setAgentName(username);
       } catch (e) {
