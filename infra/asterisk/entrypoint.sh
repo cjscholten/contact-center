@@ -14,4 +14,12 @@ for f in ari.conf pjsip.conf; do
     < "/etc/asterisk/templates/$f" > "/etc/asterisk/$f"
 done
 
+# rtp.conf: statische basis uit het sjabloon; de ICE-NAT-mapping (privé => publiek IP) wordt
+# alleen toegevoegd als beide RTP-variabelen gezet zijn (nodig bij 1:1 NAT, bv. de Azure-VM).
+# Altijd vers uit het sjabloon renderen houdt dit idempotent (geen dubbele secties bij restart).
+cp /etc/asterisk/templates/rtp.conf /etc/asterisk/rtp.conf
+if [ -n "${RTP_PRIVATE_IP:-}" ] && [ -n "${RTP_PUBLIC_IP:-}" ]; then
+  printf '\n[ice_host_candidates]\n%s => %s\n' "$RTP_PRIVATE_IP" "$RTP_PUBLIC_IP" >> /etc/asterisk/rtp.conf
+fi
+
 exec "$@"

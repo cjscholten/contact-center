@@ -29,12 +29,18 @@ op basis van het sjabloon en vul echte waarden in (productie: geen `changeme-dev
 ```bash
 # op de VM, in deze map
 cp .env.example .env
-# bewerk .env: POSTGRES_PASSWORD, KEYCLOAK_ADMIN_PASSWORD, ARI_PASSWORD
+# bewerk .env (zie .env.example voor alle sleutels):
+#   secrets:  POSTGRES_PASSWORD, KEYCLOAK_ADMIN_PASSWORD, ARI_PASSWORD, AGENT_SIP_PASSWORD, TURN_SECRET
+#   adressen: SBC_IP, RTP_PRIVATE_IP/RTP_PUBLIC_IP, TURN_PUBLIC_HOST, TURN_EXTERNAL_IP
 ```
 
-`docker compose` leest `infra/.env` automatisch. Ontbreekt het bestand of een variabele,
-dan stopt `compose up` met een duidelijke melding (de `${VAR:?…}`-bewaking). `ARI_PASSWORD`
-moet voorlopig gelijk zijn aan het wachtwoord in `asterisk/conf/ari.conf` (die is nog statisch).
+`docker compose` leest `infra/.env` automatisch. Ontbreekt het bestand of een verplichte
+variabele, dan stopt `compose up` met een duidelijke melding (de `${VAR:?…}`-bewaking). De
+Asterisk-configs zijn **sjablonen** in `asterisk/templates/` die `entrypoint.sh` bij het
+starten invult uit deze env-variabelen: `ari.conf` (ARI_PASSWORD), `pjsip.conf`
+(AGENT_SIP_PASSWORD, SBC_IP) en de ICE-NAT-mapping in `rtp.conf` (RTP_PRIVATE_IP/RTP_PUBLIC_IP,
+alleen toegevoegd als beide gezet zijn). Zo staan er geen secrets/host-IP's meer in git en
+zijn er geen handmatige edits op de VM meer nodig.
 
 Lokaal de backend draaien (`dotnet run`): kopieer
 `backend/src/ContactCenter.Api/appsettings.Local.json.example` naar
