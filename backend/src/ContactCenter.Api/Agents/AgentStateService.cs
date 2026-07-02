@@ -45,6 +45,7 @@ public sealed class AgentStateService(
         public AgentStatus Status { get; set; } = AgentStatus.Available;
         public Presence Presence { get; set; } = Presence.Available;
         public DateTimeOffset Since { get; set; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? WrapUpEndsAt { get; set; }
         public CancellationTokenSource? WrapUpTimer { get; set; }
     }
 
@@ -228,6 +229,8 @@ public sealed class AgentStateService(
             }
             else
             {
+                // Deadline vóór SetStatus zetten zodat de meteen-gepushte snapshot de aftelklok al bevat.
+                state.WrapUpEndsAt = DateTimeOffset.UtcNow.AddSeconds(seconds);
                 SetStatus(state, AgentStatus.WrapUp);
                 StartWrapUpTimer(state, TimeSpan.FromSeconds(seconds));
                 return;
@@ -389,7 +392,8 @@ public sealed class AgentStateService(
     }
 
     private static AgentSnapshot Snapshot(RuntimeState state)
-        => new(state.Name, state.DisplayName, state.Status, state.Presence, state.Since);
+        => new(state.Name, state.DisplayName, state.Status, state.Presence, state.Since,
+            state.Status == AgentStatus.WrapUp ? state.WrapUpEndsAt : null);
 
     private static AgentSnapshot LoggedOutSnapshot(string name, string displayName)
         => new(name, displayName, AgentStatus.LoggedOut, Presence.Available, default);

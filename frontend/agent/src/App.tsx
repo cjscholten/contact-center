@@ -179,14 +179,17 @@ export default function App() {
         agentName={agentName}
         status={snapshot?.status ?? 'LoggedOut'}
         presence={snapshot?.presence ?? 'Available'}
+        wrapUpEndsAt={snapshot?.wrapUpEndsAt ?? null}
         callState={sp.callState}
         onHold={onHold}
+        muted={sp.muted}
         consultWith={consultWith}
         waiting={waiting}
         canPickup={sp.callState === 'idle'}
         onAnswer={() => void sp.answer()}
         onHangup={() => void sp.hangup()}
         onToggleHold={() => void toggleHold()}
+        onToggleMute={() => sp.toggleMute()}
         onFinishWrapUp={() => void finishWrapUp()}
         onSetPresence={(p) => void setPresence(p)}
         onPickup={(id) => void pickup(id)}

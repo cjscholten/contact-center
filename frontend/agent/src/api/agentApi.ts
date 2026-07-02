@@ -10,6 +10,8 @@ export interface AgentSnapshot {
   status: AgentStatus;
   presence: Presence;
   since: string;
+  /** Wanneer de nawerktijd afloopt (ISO); alleen gevuld bij status WrapUp. Voor de aftelklok. */
+  wrapUpEndsAt: string | null;
 }
 
 export interface DirectoryEntry {
