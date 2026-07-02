@@ -47,6 +47,10 @@ public sealed class CcDbContext(DbContextOptions<CcDbContext> options, ITenantAc
             e.Property(q => q.AdHocForwardNumber).HasMaxLength(20);
             e.Property(q => q.TimeZone).HasMaxLength(60);
             e.Property(q => q.MusicOnHoldClass).HasMaxLength(60).HasDefaultValue("default");
+            e.Property(q => q.OfferMode).HasConversion<string>().HasMaxLength(20)
+                .HasDefaultValue(QueueOfferMode.AutoDispatch);
+            e.Property(q => q.RoutingStrategy).HasConversion<string>().HasMaxLength(20)
+                .HasDefaultValue(QueueRoutingStrategy.LongestIdle);
             e.Property(q => q.WelcomeText).HasMaxLength(1000).HasDefaultValue("");
             e.Property(q => q.ClosedText).HasMaxLength(1000).HasDefaultValue("");
             e.Property(q => q.Voice).HasMaxLength(60).HasDefaultValue("nl_NL-pim-medium");

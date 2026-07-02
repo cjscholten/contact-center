@@ -4,6 +4,12 @@ import { authHeader } from '@zeta/ui';
 export type DayOfWeek =
   | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
 
+/** Hoe gesprekken uit de wachtrij worden aangeboden. */
+export type OfferMode = 'AutoDispatch' | 'ManualPickup';
+
+/** Verdeelmethode bij automatisch aanbieden. */
+export type RoutingStrategy = 'RingAll' | 'LongestIdle' | 'Linear';
+
 /** Tijden komen als "HH:mm:ss" van de backend (TimeOnly). */
 export interface OpeningHours {
   day: DayOfWeek;
@@ -33,6 +39,8 @@ export interface QueueDetail {
   openingHours: OpeningHours[];
   numbers: string[];
   musicOnHoldClass: string;
+  offerMode: OfferMode;
+  routingStrategy: RoutingStrategy;
 }
 
 export interface QueueWriteRequest {
@@ -47,6 +55,8 @@ export interface QueueWriteRequest {
   openingHours: OpeningHours[];
   numbers: string[];
   musicOnHoldClass: string;
+  offerMode: OfferMode;
+  routingStrategy: RoutingStrategy;
 }
 
 export interface AgentListItem {

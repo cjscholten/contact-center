@@ -44,6 +44,7 @@ public sealed class CallCoordinator : IHostedService
     // wachtrijen van verschillende tenants niet dezelfde holding-brug/MoH delen.
     private readonly Dictionary<string, string> _holdingBridges = new(StringComparer.Ordinal); // queueKey → bridgeId
     private readonly ConcurrentDictionary<string, string> _mohByQueue = new(StringComparer.Ordinal); // queueKey → MoH-klasse
+    private readonly ConcurrentDictionary<string, QueueOffer> _offerByQueue = new(StringComparer.Ordinal); // queueKey → aanbied-instelling
     private readonly List<WaitingCaller> _waiting = [];
     private readonly Dictionary<string, PendingConnect> _pending = new(StringComparer.Ordinal); // agentChannelId → pending
     private readonly Dictionary<string, ActiveCall> _activeByChannel = new(StringComparer.Ordinal);
@@ -68,6 +69,11 @@ public sealed class CallCoordinator : IHostedService
         _logger = logger;
         _agents.RequestDispatch = SignalDispatch;
     }
+
+    /// <summary>Hoe een wachtrij gesprekken aanbiedt (uit de DB gecachet); terugval als de wachtrij niet leesbaar is.</summary>
+    private sealed record QueueOffer(QueueOfferMode Mode, QueueRoutingStrategy Strategy);
+
+    private static readonly QueueOffer DefaultOffer = new(QueueOfferMode.AutoDispatch, QueueRoutingStrategy.LongestIdle);
 
     private sealed record WaitingCaller(
         string ChannelId, int TenantId, string QueueName, string CallerId, DateTimeOffset EnqueuedAt)
@@ -116,7 +122,9 @@ public sealed class CallCoordinator : IHostedService
         CancellationToken ct = default)
     {
         var queueKey = AgentStateService.QueueKey(tenantId, queueName);
-        _mohByQueue[queueKey] = await ResolveMohClassAsync(tenantId, queueName, ct); // huidige MoH-klasse, vóór de lock
+        var (moh, offer) = await ResolveQueueRuntimeAsync(tenantId, queueName, ct); // MoH + aanbied-instelling, vóór de lock
+        _mohByQueue[queueKey] = moh;
+        _offerByQueue[queueKey] = offer;
         List<WaitingCallView> snapshot;
         await _gate.WaitAsync(ct);
         try
@@ -139,6 +147,7 @@ public sealed class CallCoordinator : IHostedService
 
     public async Task OnAgentAnsweredAsync(string agentChannelId, CancellationToken ct = default)
     {
+        var losers = new List<PendingConnect>();
         await _gate.WaitAsync(ct);
         try
         {
@@ -147,6 +156,14 @@ public sealed class CallCoordinator : IHostedService
                 _logger.LogWarning("Agent-kanaal {Channel} nam op maar er is geen wachtende reservering", agentChannelId);
                 await SafeHangupAsync(agentChannelId, ct);
                 return;
+            }
+
+            // Ring-all: de overige rinkelende legs voor deze beller verliezen — opruimen ná de lock.
+            foreach (var (chan, other) in _pending
+                         .Where(kv => kv.Value.Caller.ChannelId == pending.Caller.ChannelId).ToList())
+            {
+                _pending.Remove(chan);
+                losers.Add(other);
             }
 
             var mixingBridge = await _ari.CreateBridgeAsync("mixing", ct);
@@ -173,6 +190,13 @@ public sealed class CallCoordinator : IHostedService
             _gate.Release();
         }
 
+        // Verliezende ring-all-legs ophangen + die agenten weer beschikbaar maken (buiten de lock).
+        foreach (var loser in losers)
+        {
+            await SafeHangupAsync(loser.AgentChannelId, ct);
+            await _agents.ReleaseReservationAsync(loser.TenantId, loser.AgentName, ct);
+        }
+
         if (_activeByChannel.TryGetValue(agentChannelId, out var connected))
             await _agents.ConfirmOnCallAsync(connected.TenantId, connected.AgentName, ct);
     }
@@ -184,6 +208,7 @@ public sealed class CallCoordinator : IHostedService
         (int TenantId, string Name)? wrapUpAgent = null;
         (int TenantId, string Name)? releaseAgent = null;
         (int TenantId, string Name)? resetAgent = null;
+        var releaseAgents = new List<(int TenantId, string Name)>(); // ring-all: meerdere legs tegelijk vrijgeven
         WaitingCaller? requeue = null;
         int? affectedTenant = null;
         var signalDispatch = false;
@@ -215,20 +240,26 @@ public sealed class CallCoordinator : IHostedService
                 affectedTenant = gone.TenantId;
                 _logger.LogInformation("Wachtende beller {Channel} hing op", channelId);
             }
-            // 3) agent-leg verdween tijdens rinkelen (niet opgenomen): beller terug in de wacht
+            // 3) agent-leg verdween tijdens rinkelen (niet opgenomen). Bij ring-all rinkelen er mogelijk nog
+            //    andere legs voor deze beller: pas requeuen als dit de láátste was, anders alleen deze agent vrij.
             else if (_pending.Remove(channelId, out var pending))
             {
                 releaseAgent = (pending.TenantId, pending.AgentName);
-                requeue = pending.Caller;
                 affectedTenant = pending.TenantId;
+                if (!_pending.Values.Any(p => p.Caller.ChannelId == pending.Caller.ChannelId))
+                    requeue = pending.Caller;
             }
-            // 4) een beller voor wie een agent aan het rinkelen is, hing zelf op
-            else if (FindPendingByCaller(channelId) is { } byCaller)
+            // 4) een beller voor wie (mogelijk meerdere, ring-all) agent-legs rinkelen, hing zelf op: alle legs opruimen
+            else if (_pending.Values.Any(p => p.Caller.ChannelId == channelId))
             {
-                _pending.Remove(byCaller.AgentChannelId);
-                await SafeHangupAsync(byCaller.AgentChannelId, ct);
-                releaseAgent = (byCaller.TenantId, byCaller.AgentName);
-                affectedTenant = byCaller.TenantId;
+                var legs = _pending.Where(kv => kv.Value.Caller.ChannelId == channelId).ToList();
+                affectedTenant = legs[0].Value.TenantId;
+                foreach (var (chan, p) in legs)
+                {
+                    _pending.Remove(chan);
+                    await SafeHangupAsync(chan, ct);
+                    releaseAgents.Add((p.TenantId, p.AgentName));
+                }
             }
 
             if (requeue is not null)
@@ -249,6 +280,8 @@ public sealed class CallCoordinator : IHostedService
             await _agents.BeginWrapUpAsync(wu.TenantId, wu.Name, ct);
         if (releaseAgent is { } rel)
             await _agents.ReleaseReservationAsync(rel.TenantId, rel.Name, ct);
+        foreach (var (tenantId, name) in releaseAgents)
+            await _agents.ReleaseReservationAsync(tenantId, name, ct);
         if (resetAgent is { } res)
             await _agents.ResetToAvailableAsync(res.TenantId, res.Name, ct);
         if (requeue is not null || signalDispatch)
@@ -717,25 +750,15 @@ public sealed class CallCoordinator : IHostedService
                 progress = false;
                 foreach (var caller in _waiting.OrderBy(_ => 0).ToList()) // oudste eerst (invoegvolgorde)
                 {
-                    var reserved = await _agents.TryReserveForCallAsync([caller.QueueKey], ct);
-                    if (reserved is null)
-                        continue;
+                    var offer = _offerByQueue.GetValueOrDefault(caller.QueueKey, DefaultOffer);
+                    if (offer.Mode == QueueOfferMode.ManualPickup)
+                        continue; // handmatig: niet automatisch verdelen, alleen via pickup
 
-                    try
-                    {
-                        var agentChannelId = await _ari.OriginateToStasisAsync(
-                            reserved.Endpoint, "agent", caller.CallerId, ct: ct);
-                        _waiting.Remove(caller);
-                        _pending[agentChannelId] = new PendingConnect(reserved.TenantId, reserved.Name, agentChannelId, caller);
-                        _logger.LogInformation("Beller {Caller} toegewezen aan agent {Agent}, originate {Channel}",
-                            caller.ChannelId, reserved.Name, agentChannelId);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Originate naar agent {Agent} mislukt; reservering vrijgeven", reserved.Name);
-                        await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
+                    var dispatched = offer.Strategy == QueueRoutingStrategy.RingAll
+                        ? await TryRingAllAsync(caller, ct)
+                        : await TryDispatchOneAsync(caller, offer.Strategy, ct);
+                    if (!dispatched)
                         continue;
-                    }
 
                     dispatchedTenants.Add(caller.TenantId);
                     progress = true;
@@ -751,6 +774,63 @@ public sealed class CallCoordinator : IHostedService
 
         if (dispatchedTenants.Count > 0)
             await NotifyQueuesAsync(snapshot, dispatchedTenants, ct);
+    }
+
+    /// <summary>Aangeroepen met _gate vast. Reserveert één agent volgens de strategie en belt die; true bij toewijzing.</summary>
+    private async Task<bool> TryDispatchOneAsync(WaitingCaller caller, QueueRoutingStrategy strategy, CancellationToken ct)
+    {
+        var reserved = await _agents.TryReserveForCallAsync([caller.QueueKey], strategy, ct);
+        if (reserved is null)
+            return false;
+        try
+        {
+            var agentChannelId = await _ari.OriginateToStasisAsync(reserved.Endpoint, AgentAppArg, caller.CallerId, ct: ct);
+            _waiting.Remove(caller);
+            _pending[agentChannelId] = new PendingConnect(reserved.TenantId, reserved.Name, agentChannelId, caller);
+            _logger.LogInformation("Beller {Caller} toegewezen aan agent {Agent} ({Strategy}), originate {Channel}",
+                caller.ChannelId, reserved.Name, strategy, agentChannelId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Originate naar agent {Agent} mislukt; reservering vrijgeven", reserved.Name);
+            await _agents.ReleaseReservationAsync(reserved.TenantId, reserved.Name, ct);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Aangeroepen met _gate vast. Ring-all: reserveert álle beschikbare agenten en belt ze tegelijk;
+    /// elke leg krijgt een eigen _pending-entry met dezelfde beller. True zodra minstens één agent rinkelt.
+    /// </summary>
+    private async Task<bool> TryRingAllAsync(WaitingCaller caller, CancellationToken ct)
+    {
+        var reserved = await _agents.ReserveAllForCallAsync([caller.QueueKey], ct);
+        if (reserved.Count == 0)
+            return false;
+
+        var ringing = 0;
+        foreach (var r in reserved)
+        {
+            try
+            {
+                var agentChannelId = await _ari.OriginateToStasisAsync(r.Endpoint, AgentAppArg, caller.CallerId, ct: ct);
+                _pending[agentChannelId] = new PendingConnect(r.TenantId, r.Name, agentChannelId, caller);
+                ringing++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ring-all originate naar agent {Agent} mislukt; reservering vrijgeven", r.Name);
+                await _agents.ReleaseReservationAsync(r.TenantId, r.Name, ct);
+            }
+        }
+
+        if (ringing == 0)
+            return false; // alle originates faalden; beller blijft wachten
+
+        _waiting.Remove(caller);
+        _logger.LogInformation("Beller {Caller} ring-all naar {Count} agent(en)", caller.ChannelId, ringing);
+        return true;
     }
 
     // --- Positie-meldingen ----------------------------------------------------
@@ -849,23 +929,27 @@ public sealed class CallCoordinator : IHostedService
         await _ari.StartBridgeMohAsync(bridgeId, _mohByQueue.GetValueOrDefault(queueKey, DefaultMohClass), ct);
     }
 
-    /// <summary>Leest de music-on-hold-klasse van de wachtrij (van deze tenant); terugval op "default" bij fout/leeg.</summary>
-    private async Task<string> ResolveMohClassAsync(int tenantId, string queueName, CancellationToken ct)
+    /// <summary>Leest de MoH-klasse én aanbied-instelling van de wachtrij (van deze tenant) in één query;
+    /// terugval op "default"/<see cref="DefaultOffer"/> bij fout/leeg.</summary>
+    private async Task<(string Moh, QueueOffer Offer)> ResolveQueueRuntimeAsync(int tenantId, string queueName, CancellationToken ct)
     {
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
-            var moh = await db.Queues.AsNoTracking().IgnoreQueryFilters()
+            var row = await db.Queues.AsNoTracking().IgnoreQueryFilters()
                 .Where(q => q.TenantId == tenantId && q.Name == queueName)
-                .Select(q => q.MusicOnHoldClass)
+                .Select(q => new { q.MusicOnHoldClass, q.OfferMode, q.RoutingStrategy })
                 .FirstOrDefaultAsync(ct);
-            return string.IsNullOrWhiteSpace(moh) ? DefaultMohClass : moh;
+            if (row is null)
+                return (DefaultMohClass, DefaultOffer);
+            var moh = string.IsNullOrWhiteSpace(row.MusicOnHoldClass) ? DefaultMohClass : row.MusicOnHoldClass;
+            return (moh, new QueueOffer(row.OfferMode, row.RoutingStrategy));
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("MoH-klasse voor '{Queue}' niet leesbaar ({Reden}); standaard gebruikt",
+            _logger.LogWarning("Wachtrij-instellingen voor '{Queue}' niet leesbaar ({Reden}); standaard gebruikt",
                 queueName, ex.Message);
-            return DefaultMohClass;
+            return (DefaultMohClass, DefaultOffer);
         }
     }
 
@@ -873,9 +957,6 @@ public sealed class CallCoordinator : IHostedService
         => _activeByChannel.Values.FirstOrDefault(c => c.TenantId == tenantId && c.AgentName == agentName);
 
     private static string WarmKey(int tenantId, string agentName) => $"{tenantId}:{agentName}";
-
-    private PendingConnect? FindPendingByCaller(string callerChannelId)
-        => _pending.Values.FirstOrDefault(p => p.Caller.ChannelId == callerChannelId);
 
     /// <summary>Huidige wachtende gesprekken van één tenant (voor de initiële GET; updates lopen via de notifier).</summary>
     public async Task<IReadOnlyList<WaitingCallView>> GetWaitingViewAsync(int tenantId, CancellationToken ct = default)

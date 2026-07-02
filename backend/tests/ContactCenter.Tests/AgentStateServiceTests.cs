@@ -1,4 +1,5 @@
 using ContactCenter.Api.Agents;
+using ContactCenter.Api.Data;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ContactCenter.Tests;
@@ -162,6 +163,58 @@ public class AgentStateServiceTests
         await sut.ConfirmOnCallAsync(T, "agent1001"); // → OnCall
 
         Assert.Null(await sut.TryReserveSpecificAsync(T, "agent1001"));
+    }
+
+    [Fact]
+    public async Task Linear_kiest_de_agent_met_de_eerste_naam()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1002", ["support"]), ("agent1001", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync(T, "agent1002"); // bewust eerst ingelogd
+        await sut.LoginAsync(T, "agent1001");
+
+        var reserved = await sut.TryReserveForCallAsync([Q("support")], QueueRoutingStrategy.Linear);
+
+        Assert.Equal("agent1001", reserved!.Name); // naam-volgorde, niet inlog-volgorde
+    }
+
+    [Fact]
+    public async Task LongestIdle_kiest_de_agent_die_het_langst_geen_gesprek_had()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0, ("agent1001", ["support"]), ("agent1002", ["support"]));
+        var sut = Build(factory);
+        await sut.LoginAsync(T, "agent1001");
+        await sut.LoginAsync(T, "agent1002");
+
+        // agent1001 krijgt (en beëindigt) net een gesprek → minst inactief; agent1002 nog nooit gebeld
+        await sut.TryReserveSpecificAsync(T, "agent1001");
+        await sut.ConfirmOnCallAsync(T, "agent1001");
+        await sut.BeginWrapUpAsync(T, "agent1001"); // nawerktijd 0 → meteen weer beschikbaar
+
+        var reserved = await sut.TryReserveForCallAsync([Q("support")], QueueRoutingStrategy.LongestIdle);
+
+        Assert.Equal("agent1002", reserved!.Name);
+    }
+
+    [Fact]
+    public async Task Ring_all_reserveert_alle_beschikbare_wachtrij_agenten()
+    {
+        var factory = new TestDbContextFactory();
+        factory.Seed(wrapUpSeconds: 0,
+            ("agent1001", ["support"]), ("agent1002", ["support"]), ("agent1003", ["sales"]));
+        var sut = Build(factory);
+        await sut.LoginAsync(T, "agent1001");
+        await sut.LoginAsync(T, "agent1002");
+        await sut.LoginAsync(T, "agent1003");
+
+        var reserved = await sut.ReserveAllForCallAsync([Q("support")]);
+
+        Assert.Equal(2, reserved.Count); // agent1003 zit in sales, niet in support
+        Assert.Equal(AgentStatus.Ringing, (await sut.GetAsync(T, "agent1001"))!.Status);
+        Assert.Equal(AgentStatus.Ringing, (await sut.GetAsync(T, "agent1002"))!.Status);
+        Assert.Equal(AgentStatus.Available, (await sut.GetAsync(T, "agent1003"))!.Status);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.CallFlow;
+using ContactCenter.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -36,6 +37,34 @@ public class CallCoordinatorTests
             NullLogger<CallCoordinator>.Instance);
         return (coordinator, ari, agentSvc, tts);
     }
+
+    // Zet de aanbied-instelling van álle geseede wachtrijen (de tests gebruiken er één) vóór het bouwen.
+    private static async Task<(CallCoordinator coordinator, FakeAriClient ari, AgentStateService agents)>
+        BuildWithOfferAsync(QueueOfferMode mode, QueueRoutingStrategy strategy,
+            params (string name, string[] queues)[] agents)
+    {
+        if (agents.Length == 0)
+            agents = [("agent1001", ["support"])];
+        var factory = new TestDbContextFactory();
+        factory.Seed(0, agents);
+        await using (var db = factory.CreateDbContext())
+        {
+            foreach (var q in await db.Queues.ToListAsync())
+            {
+                q.OfferMode = mode;
+                q.RoutingStrategy = strategy;
+            }
+            await db.SaveChangesAsync();
+        }
+        var agentSvc = new AgentStateService(factory, NullLogger<AgentStateService>.Instance);
+        var ari = new FakeAriClient();
+        var coordinator = new CallCoordinator(
+            ari, agentSvc, factory, new FakeRealtimeNotifier(), new FakeTtsService(), EmptyConfig,
+            NullLogger<CallCoordinator>.Instance);
+        return (coordinator, ari, agentSvc);
+    }
+
+    private static string NameOf(string endpoint) => endpoint["PJSIP/".Length..];
 
     [Fact]
     public async Task Wachtende_beller_komt_in_holding_brug_met_wachtmuziek()
@@ -452,6 +481,69 @@ public class CallCoordinatorTests
         await agents.LoginAsync(T, "agent1001");
         await agents.LoginAsync(T, "agent1002");
         Assert.False(await coordinator.StartWarmTransferAsync(T, "agent1001", "agent1002"));
+    }
+
+    // --- Aanbied-modus + verdeelstrategie -------------------------------------
+
+    [Fact]
+    public async Task Handmatige_wachtrij_wordt_niet_automatisch_verdeeld_maar_pickup_werkt()
+    {
+        var (coordinator, ari, agents) =
+            await BuildWithOfferAsync(QueueOfferMode.ManualPickup, QueueRoutingStrategy.LongestIdle);
+        await agents.LoginAsync(T, "agent1001");
+        await coordinator.EnqueueCallerAsync("caller-1", T, "support", "+31600000000");
+
+        await coordinator.TryDispatchAllAsync();
+        Assert.Empty(ari.Originates); // geen automatische verdeling
+
+        Assert.True(await coordinator.PickupAsync(T, "agent1001", "caller-1"));
+        Assert.Single(ari.Originates); // handmatig oppakken werkt wél
+    }
+
+    [Fact]
+    public async Task Ring_all_belt_alle_agenten_en_de_eerste_opnemer_wint()
+    {
+        var (coordinator, ari, agents) = await BuildWithOfferAsync(
+            QueueOfferMode.AutoDispatch, QueueRoutingStrategy.RingAll,
+            ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync(T, "agent1001");
+        await agents.LoginAsync(T, "agent1002");
+        await coordinator.EnqueueCallerAsync("caller-1", T, "support", "+31600000000");
+
+        await coordinator.TryDispatchAllAsync();
+        Assert.Equal(2, ari.Originates.Count); // beide agenten rinkelen
+
+        var winner = ari.Originates[0];
+        var loser = ari.Originates[1];
+        await coordinator.OnAgentAnsweredAsync(winner.ChannelId);
+
+        Assert.Contains(loser.ChannelId, ari.Hangups); // verliezende leg opgehangen
+        Assert.Equal(AgentStatus.OnCall, (await agents.GetAsync(T, NameOf(winner.Endpoint)))!.Status);
+        Assert.Equal(AgentStatus.Available, (await agents.GetAsync(T, NameOf(loser.Endpoint)))!.Status);
+    }
+
+    [Fact]
+    public async Task Ring_all_requeuet_de_beller_pas_als_de_laatste_leg_wegvalt()
+    {
+        var (coordinator, ari, agents) = await BuildWithOfferAsync(
+            QueueOfferMode.AutoDispatch, QueueRoutingStrategy.RingAll,
+            ("agent1001", ["support"]), ("agent1002", ["support"]));
+        await agents.LoginAsync(T, "agent1001");
+        await agents.LoginAsync(T, "agent1002");
+        await coordinator.EnqueueCallerAsync("caller-1", T, "support", "+31600000000");
+        await coordinator.TryDispatchAllAsync();
+        var legs = ari.Originates.Select(o => o.ChannelId).ToList();
+
+        // eerste leg valt weg (nam niet op): de andere rinkelt nog → beller nog niet terug in de wacht
+        await coordinator.OnChannelGoneAsync(legs[0]);
+        ari.Originates.Clear();
+        await coordinator.TryDispatchAllAsync();
+        Assert.Empty(ari.Originates);
+
+        // laatste leg valt weg → beller terug in de wacht en wordt opnieuw aangeboden (ring-all)
+        await coordinator.OnChannelGoneAsync(legs[1]);
+        await coordinator.TryDispatchAllAsync();
+        Assert.NotEmpty(ari.Originates);
     }
 
     [Fact]
