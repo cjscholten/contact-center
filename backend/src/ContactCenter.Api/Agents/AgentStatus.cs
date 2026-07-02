@@ -23,4 +23,6 @@ public sealed record AgentSnapshot(
     string DisplayName,
     AgentStatus Status,
     Presence Presence,
-    DateTimeOffset Since);
+    DateTimeOffset Since,
+    // Wanneer de nawerktijd automatisch afloopt (alleen gevuld bij status WrapUp); voor de aftelklok in de UI.
+    DateTimeOffset? WrapUpEndsAt = null);

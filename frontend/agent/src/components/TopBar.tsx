@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
 import { Button, Group, Menu, Text, Title } from '@mantine/core';
 import {
   IconCheck,
   IconChevronDown,
   IconLogout,
+  IconMicrophone,
+  IconMicrophoneOff,
   IconPhone,
   IconPhoneOff,
   IconPlayerPause,
@@ -31,16 +34,25 @@ const PRESENCE_VIEW: Record<Presence, { label: string; color: string }> = {
   Unavailable: { label: 'Niet beschikbaar', color: 'red' },
 };
 
+function formatCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 interface Props {
   agentName: string;
   status: AgentStatus;
   presence: Presence;
+  wrapUpEndsAt: string | null;
   callState: CallState;
   onHold: boolean;
+  muted: boolean;
   consultWith: string | null;
   onAnswer: () => void;
   onHangup: () => void;
   onToggleHold: () => void;
+  onToggleMute: () => void;
   onFinishWrapUp: () => void;
   onSetPresence: (presence: Presence) => void;
   onCompleteWarmTransfer: () => void;
@@ -51,7 +63,19 @@ interface Props {
 export function TopBar(props: Props) {
   const inCall = props.callState === 'in_call';
   const consulting = props.consultWith !== null;
+  const inWrapUp = props.status === 'WrapUp';
   const view = CALL_VIEW[props.status] ?? PRESENCE_VIEW[props.presence];
+
+  // Tikkende klok; de resterende nawerktijd leiden we tijdens render af (geen setState-in-effect).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, []);
+  const remaining =
+    inWrapUp && props.wrapUpEndsAt
+      ? Math.max(0, Math.round((new Date(props.wrapUpEndsAt).getTime() - now) / 1000))
+      : null;
 
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">
@@ -81,6 +105,15 @@ export function TopBar(props: Props) {
         >
           {props.onHold ? 'Uit de wacht' : 'In de wacht'}
         </Button>
+        <Button
+          variant={props.muted ? 'filled' : 'default'}
+          color={props.muted ? 'red' : undefined}
+          leftSection={props.muted ? <IconMicrophoneOff size={18} /> : <IconMicrophone size={18} />}
+          disabled={!inCall}
+          onClick={props.onToggleMute}
+        >
+          {props.muted ? 'Demping opheffen' : 'Microfoon dempen'}
+        </Button>
         {consulting && (
           <>
             <Text size="sm" c="dimmed" ml="xs">
@@ -99,14 +132,19 @@ export function TopBar(props: Props) {
             </Button>
           </>
         )}
-        {props.status === 'WrapUp' && (
-          <Button color="orange" onClick={props.onFinishWrapUp}>
-            Klaar
-          </Button>
-        )}
       </Group>
 
       <Group gap="md" wrap="nowrap">
+        {inWrapUp && (
+          <Group gap="xs" wrap="nowrap">
+            <Text size="sm" c="orange" fw={600}>
+              Nawerktijd{remaining !== null ? ` ${formatCountdown(remaining)}` : ''}
+            </Text>
+            <Button color="orange" onClick={props.onFinishWrapUp}>
+              Klaar
+            </Button>
+          </Group>
+        )}
         <Menu position="bottom-end" withinPortal>
           <Menu.Target>
             <Button color={view.color} variant="filled" size="md" rightSection={<IconChevronDown size={16} />}>

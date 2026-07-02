@@ -8,10 +8,13 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'registered' | 'fa
 export interface Softphone {
   connectionState: ConnectionState;
   callState: CallState;
+  muted: boolean;
   connect: (wsUrl: string, user: string, password: string, iceServers?: RTCIceServer[]) => Promise<void>;
   disconnect: () => Promise<void>;
   answer: () => Promise<void>;
   hangup: () => Promise<void>;
+  /** Dempt of ontdempt de eigen microfoon tijdens een gesprek. */
+  toggleMute: () => void;
   /** Neemt het eerstvolgende inkomende gesprek automatisch op (voor een eigen pickup). */
   armAutoAnswer: () => void;
   /** Annuleert een openstaande auto-answer (bv. als de pickup mislukte). */
@@ -27,6 +30,7 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
   const userRef = useRef<Web.SimpleUser | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [callState, setCallState] = useState<CallState>('idle');
+  const [muted, setMuted] = useState(false);
   const autoAnswerRef = useRef(false);
   const autoAnswerTimerRef = useRef<number | null>(null);
 
@@ -79,10 +83,12 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
         },
         onCallAnswered: () => {
           stopRinging();
+          setMuted(false); // elk nieuw gesprek begint ongedempt
           setCallState('in_call');
         },
         onCallHangup: () => {
           stopRinging();
+          setMuted(false);
           setCallState('idle');
         },
         onServerDisconnect: () => setConnectionState('failed'),
@@ -122,5 +128,28 @@ export function useSoftphone(audioRef: RefObject<HTMLAudioElement | null>): Soft
     await userRef.current?.hangup();
   }, []);
 
-  return { connectionState, callState, connect, disconnect, answer, hangup, armAutoAnswer, disarmAutoAnswer };
+  const toggleMute = useCallback(() => {
+    const su = userRef.current;
+    if (!su) return;
+    if (su.isMuted()) {
+      su.unmute();
+      setMuted(false);
+    } else {
+      su.mute();
+      setMuted(true);
+    }
+  }, []);
+
+  return {
+    connectionState,
+    callState,
+    muted,
+    connect,
+    disconnect,
+    answer,
+    hangup,
+    toggleMute,
+    armAutoAnswer,
+    disarmAutoAnswer,
+  };
 }

@@ -10,14 +10,17 @@ interface Props {
   agentName: string;
   status: AgentStatus;
   presence: Presence;
+  wrapUpEndsAt: string | null;
   callState: CallState;
   onHold: boolean;
+  muted: boolean;
   consultWith: string | null;
   waiting: WaitingCall[];
   canPickup: boolean;
   onAnswer: () => void;
   onHangup: () => void;
   onToggleHold: () => void;
+  onToggleMute: () => void;
   onFinishWrapUp: () => void;
   onSetPresence: (presence: Presence) => void;
   onPickup: (callId: string) => void;
@@ -37,12 +40,15 @@ export function ZetaDeskShell(props: Props) {
           agentName={props.agentName}
           status={props.status}
           presence={props.presence}
+          wrapUpEndsAt={props.wrapUpEndsAt}
           callState={props.callState}
           onHold={props.onHold}
+          muted={props.muted}
           consultWith={props.consultWith}
           onAnswer={props.onAnswer}
           onHangup={props.onHangup}
           onToggleHold={props.onToggleHold}
+          onToggleMute={props.onToggleMute}
           onFinishWrapUp={props.onFinishWrapUp}
           onSetPresence={props.onSetPresence}
           onCompleteWarmTransfer={props.onCompleteWarmTransfer}
