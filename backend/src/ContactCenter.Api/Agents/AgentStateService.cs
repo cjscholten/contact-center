@@ -46,6 +46,9 @@ public sealed class AgentStateService(
         public Presence Presence { get; set; } = Presence.Available;
         public DateTimeOffset Since { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? WrapUpEndsAt { get; set; }
+        /// <summary>Laatste keer dat de agent daadwerkelijk een gesprek kreeg (basis voor "langst inactief");
+        /// start op de inlogtijd zodat een nooit-gebelde agent als langst inactief telt.</summary>
+        public DateTimeOffset LastAssignedAt { get; set; } = DateTimeOffset.UtcNow;
         public CancellationTokenSource? WrapUpTimer { get; set; }
     }
 
@@ -134,21 +137,50 @@ public sealed class AgentStateService(
         return snapshot;
     }
 
-    /// <summary>Automatische toewijzing: reserveert een kiesbare agent in één van de (tenant-gekwalificeerde) wachtrijen.</summary>
+    /// <summary>
+    /// Automatische toewijzing: reserveert één kiesbare agent in de (tenant-gekwalificeerde) wachtrij(en)
+    /// volgens de gekozen strategie — <see cref="QueueRoutingStrategy.Linear"/> (bovenste op naam) of
+    /// <see cref="QueueRoutingStrategy.LongestIdle"/> (langst geen gesprek gehad). Ring-all loopt via
+    /// <see cref="ReserveAllForCallAsync"/>.
+    /// </summary>
     public async Task<ReservedAgent?> TryReserveForCallAsync(IReadOnlyCollection<string> queueKeys,
+        QueueRoutingStrategy strategy = QueueRoutingStrategy.LongestIdle, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var candidates = _loggedIn.Values.Where(s =>
+                s.Status == AgentStatus.Available
+                && s.Presence == Presence.Available
+                && s.QueueKeys.Any(queueKeys.Contains));
+            var state = strategy == QueueRoutingStrategy.LongestIdle
+                ? candidates.OrderBy(s => s.LastAssignedAt).ThenBy(s => s.Name, StringComparer.Ordinal).FirstOrDefault()
+                : candidates.OrderBy(s => s.Name, StringComparer.Ordinal).FirstOrDefault(); // Linear (en veilige terugval)
+            if (state is null)
+                return null;
+            SetStatus(state, AgentStatus.Ringing);
+            return new ReservedAgent(state.TenantId, state.Name, state.Endpoint);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Ring-all: reserveert álle kiesbare agenten in de wachtrij(en) (elk → Ringing) en geeft ze terug.</summary>
+    public async Task<IReadOnlyList<ReservedAgent>> ReserveAllForCallAsync(IReadOnlyCollection<string> queueKeys,
         CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            var state = _loggedIn.Values.FirstOrDefault(s =>
+            var chosen = _loggedIn.Values.Where(s =>
                 s.Status == AgentStatus.Available
                 && s.Presence == Presence.Available
-                && s.QueueKeys.Any(queueKeys.Contains));
-            if (state is null)
-                return null;
-            SetStatus(state, AgentStatus.Ringing);
-            return new ReservedAgent(state.TenantId, state.Name, state.Endpoint);
+                && s.QueueKeys.Any(queueKeys.Contains)).ToList();
+            foreach (var s in chosen)
+                SetStatus(s, AgentStatus.Ringing);
+            return [.. chosen.Select(s => new ReservedAgent(s.TenantId, s.Name, s.Endpoint))];
         }
         finally
         {
@@ -175,8 +207,24 @@ public sealed class AgentStateService(
         }
     }
 
-    public Task ConfirmOnCallAsync(int tenantId, string name, CancellationToken ct = default)
-        => TransitionAsync(tenantId, name, AgentStatus.OnCall, ct);
+    /// <summary>Agent is verbonden met de beller: markeer OnCall en leg vast dat hij nú een gesprek kreeg
+    /// (voor "langst inactief").</summary>
+    public async Task ConfirmOnCallAsync(int tenantId, string name, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
+            {
+                state.LastAssignedAt = DateTimeOffset.UtcNow;
+                SetStatus(state, AgentStatus.OnCall);
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     /// <summary>Originate mislukte of werd niet beantwoord: agent weer beschikbaar.</summary>
     public async Task ReleaseReservationAsync(int tenantId, string name, CancellationToken ct = default)
@@ -303,20 +351,6 @@ public sealed class AgentStateService(
             return [.. agents.Select(a => _loggedIn.TryGetValue(AgentKey(tenantId, a.Name), out var state)
                 ? Snapshot(state)
                 : LoggedOutSnapshot(a.Name, a.DisplayName))];
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private async Task TransitionAsync(int tenantId, string name, AgentStatus status, CancellationToken ct)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            if (_loggedIn.TryGetValue(AgentKey(tenantId, name), out var state))
-                SetStatus(state, status);
         }
         finally
         {

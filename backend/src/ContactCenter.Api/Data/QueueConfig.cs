@@ -1,5 +1,31 @@
 namespace ContactCenter.Api.Data;
 
+/// <summary>Hoe gesprekken uit deze wachtrij aan agenten worden aangeboden.</summary>
+public enum QueueOfferMode
+{
+    /// <summary>Het systeem verdeelt automatisch (met <see cref="QueueRoutingStrategy"/>).</summary>
+    AutoDispatch,
+
+    /// <summary>Geen automatische verdeling; agenten pakken gesprekken zelf uit de wachtrij.</summary>
+    ManualPickup,
+}
+
+/// <summary>Verdeelmethode bij automatische toewijzing (<see cref="QueueOfferMode.AutoDispatch"/>).</summary>
+public enum QueueRoutingStrategy
+{
+    // LongestIdle staat bewust eerst (CLR-default 0): dat is óók de database-default, zodat EF een
+    // expliciet gekozen andere waarde nooit stil door de default vervangt (sentinel-valkuil).
+
+    /// <summary>De agent die het langst geen gesprek kreeg, krijgt de volgende. Standaard.</summary>
+    LongestIdle,
+
+    /// <summary>Rinkelt bij alle beschikbare agenten tegelijk; de eerste die opneemt wint.</summary>
+    RingAll,
+
+    /// <summary>Strikt lineair: altijd de bovenste beschikbare agent (vaste volgorde op naam).</summary>
+    Linear,
+}
+
 public class QueueConfig
 {
     public int Id { get; set; }
@@ -40,6 +66,12 @@ public class QueueConfig
 
     /// <summary>Asterisk music-on-hold-klasse voor de wachtmuziek (uit musiconhold.conf).</summary>
     public string MusicOnHoldClass { get; set; } = "default";
+
+    /// <summary>Hoe gesprekken worden aangeboden: automatisch verdelen of handmatig oppakken.</summary>
+    public QueueOfferMode OfferMode { get; set; } = QueueOfferMode.AutoDispatch;
+
+    /// <summary>Verdeelmethode bij automatisch aanbieden (genegeerd bij handmatig oppakken).</summary>
+    public QueueRoutingStrategy RoutingStrategy { get; set; } = QueueRoutingStrategy.LongestIdle;
 
     public List<OpeningHoursWindow> OpeningHours { get; set; } = [];
 

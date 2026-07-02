@@ -418,6 +418,8 @@ public static partial class AdminApi
         q.AdHocClosed = req.AdHocClosed;
         q.AdHocForwardNumber = string.IsNullOrWhiteSpace(req.AdHocForwardNumber) ? null : req.AdHocForwardNumber.Trim();
         q.MusicOnHoldClass = string.IsNullOrWhiteSpace(req.MusicOnHoldClass) ? "default" : req.MusicOnHoldClass.Trim();
+        q.OfferMode = req.OfferMode;
+        q.RoutingStrategy = req.RoutingStrategy;
     }
 
     private static void ReplaceChildren(QueueConfig q, QueueWriteRequest req)
@@ -462,7 +464,7 @@ public static partial class AdminApi
         q.AdHocClosed, q.AdHocForwardNumber, q.TimeZone,
         [.. q.OpeningHours.OrderBy(w => w.Day).ThenBy(w => w.Opens).Select(w => new OpeningHoursDto(w.Day, w.Opens, w.Closes))],
         [.. q.Numbers.OrderBy(n => n.Number).Select(n => n.Number)],
-        q.MusicOnHoldClass);
+        q.MusicOnHoldClass, q.OfferMode, q.RoutingStrategy);
 }
 
 public sealed record QueueResult(QueueDetail? Detail, string? Error)
@@ -479,12 +481,16 @@ public sealed record OpeningHoursDto(DayOfWeek Day, TimeOnly Opens, TimeOnly Clo
 public sealed record QueueDetail(
     int Id, string Name, string DisplayName, string WelcomeText, string ClosedText, string Voice,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
-    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass,
+    QueueOfferMode OfferMode = QueueOfferMode.AutoDispatch,
+    QueueRoutingStrategy RoutingStrategy = QueueRoutingStrategy.LongestIdle);
 
 public sealed record QueueWriteRequest(
     string Name, string DisplayName, string WelcomeText, string ClosedText, string Voice,
     bool AdHocClosed, string? AdHocForwardNumber, string TimeZone,
-    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass);
+    IReadOnlyList<OpeningHoursDto> OpeningHours, IReadOnlyList<string> Numbers, string MusicOnHoldClass,
+    QueueOfferMode OfferMode = QueueOfferMode.AutoDispatch,
+    QueueRoutingStrategy RoutingStrategy = QueueRoutingStrategy.LongestIdle);
 
 public sealed record AgentResult(AgentDetail? Detail, string? Error)
 {

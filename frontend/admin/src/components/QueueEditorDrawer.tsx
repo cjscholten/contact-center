@@ -18,8 +18,10 @@ import { IconCopy, IconPlus, IconTrash, IconVolume } from '@tabler/icons-react';
 import {
   adminApi,
   type DayOfWeek,
+  type OfferMode,
   type QueueDetail,
   type QueueWriteRequest,
+  type RoutingStrategy,
 } from '../api/adminApi';
 
 interface Props {
@@ -47,6 +49,8 @@ interface FormState {
   windows: Window[];
   numbers: string[];
   musicOnHoldClass: string;
+  offerMode: OfferMode;
+  routingStrategy: RoutingStrategy;
 }
 
 const DAYS: { value: DayOfWeek; label: string }[] = [
@@ -65,6 +69,17 @@ const TIMEZONES = ['Europe/Amsterdam', 'Europe/Brussels', 'Europe/London', 'UTC'
 
 // Moet overeenkomen met de klassen in musiconhold.conf op de Asterisk-host.
 const MOH_CLASSES = ['default', 'office'];
+
+const OFFER_MODES: { value: OfferMode; label: string }[] = [
+  { value: 'AutoDispatch', label: 'Automatisch verdelen' },
+  { value: 'ManualPickup', label: 'Handmatig oppakken' },
+];
+
+const ROUTING_STRATEGIES: { value: RoutingStrategy; label: string }[] = [
+  { value: 'LongestIdle', label: 'Langst inactief' },
+  { value: 'RingAll', label: 'Rinkelt bij iedereen tegelijk' },
+  { value: 'Linear', label: 'Op volgorde' },
+];
 
 // Moet overeenkomen met de gebundelde Piper-stemmen (infra/backend/Dockerfile).
 const VOICES = [
@@ -157,6 +172,8 @@ function defaultForm(): FormState {
     windows: workdays.map((day) => ({ id: nextId(), day, opens: '09:00', closes: '17:00' })),
     numbers: [],
     musicOnHoldClass: 'default',
+    offerMode: 'AutoDispatch',
+    routingStrategy: 'LongestIdle',
   };
 }
 
@@ -178,6 +195,8 @@ function fromDetail(q: QueueDetail): FormState {
     })),
     numbers: [...q.numbers],
     musicOnHoldClass: q.musicOnHoldClass,
+    offerMode: q.offerMode,
+    routingStrategy: q.routingStrategy,
   };
 }
 
@@ -264,6 +283,8 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
       openingHours: form.windows.map((w) => ({ day: w.day, opens: toApiTime(w.opens), closes: toApiTime(w.closes) })),
       numbers: form.numbers.map((n) => n.trim()).filter(Boolean),
       musicOnHoldClass: form.musicOnHoldClass,
+      offerMode: form.offerMode,
+      routingStrategy: form.routingStrategy,
     };
     try {
       if (isNew) await adminApi.createQueue(body);
@@ -385,6 +406,26 @@ export function QueueEditorDrawer({ target, onClose, onSaved }: Props) {
               value={form.musicOnHoldClass}
               onChange={(v) => v && patch({ musicOnHoldClass: v })}
             />
+          </Group>
+
+          <Divider label="Aanbieden aan agenten" labelPosition="left" mt="sm" />
+          <Group grow align="flex-start">
+            <Select
+              label="Wijze"
+              description="Automatisch verdelen of agenten zelf laten oppakken"
+              data={OFFER_MODES}
+              value={form.offerMode}
+              onChange={(v) => v && patch({ offerMode: v as OfferMode })}
+            />
+            {form.offerMode === 'AutoDispatch' && (
+              <Select
+                label="Verdeelmethode"
+                description="Hoe het systeem een agent kiest"
+                data={ROUTING_STRATEGIES}
+                value={form.routingStrategy}
+                onChange={(v) => v && patch({ routingStrategy: v as RoutingStrategy })}
+              />
+            )}
           </Group>
 
           <Divider label="Ad-hoc sluiting" labelPosition="left" mt="sm" />

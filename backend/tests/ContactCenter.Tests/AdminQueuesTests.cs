@@ -16,10 +16,12 @@ public class AdminQueuesTests
         string moh = "default",
         string welcomeText = "",
         string closedText = "",
-        string voice = "nl_NL-pim-medium")
+        string voice = "nl_NL-pim-medium",
+        QueueOfferMode offerMode = QueueOfferMode.AutoDispatch,
+        QueueRoutingStrategy routingStrategy = QueueRoutingStrategy.LongestIdle)
         => new(name, display, welcomeText, closedText, voice, adHocClosed, forward, "Europe/Amsterdam",
             hours ?? [new OpeningHoursDto(DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(17, 0))],
-            numbers ?? ["+31201234599"], moh);
+            numbers ?? ["+31201234599"], moh, offerMode, routingStrategy);
 
     [Fact]
     public async Task Create_geldige_wachtrij_slaat_nummers_en_openingstijden_op()
@@ -191,5 +193,47 @@ public class AdminQueuesTests
         var saved = await verify.Queues.SingleAsync();
         Assert.Equal("Welkom.", saved.WelcomeText); // tekst wel opgeslagen
         Assert.Equal("sound:queue-thankyou", saved.WelcomePrompt); // prompt onveranderd
+    }
+
+    [Fact]
+    public async Task Create_zonder_expliciete_aanbied_instelling_gebruikt_de_defaults()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var result = await AdminApi.CreateQueueAsync(db, Req(name: "sales"));
+        Assert.Equal(QueueOfferMode.AutoDispatch, result.Detail!.OfferMode);
+        Assert.Equal(QueueRoutingStrategy.LongestIdle, result.Detail.RoutingStrategy);
+    }
+
+    [Fact]
+    public async Task Create_bewaart_de_aanbied_instelling()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var result = await AdminApi.CreateQueueAsync(db, Req(name: "sales",
+            offerMode: QueueOfferMode.ManualPickup, routingStrategy: QueueRoutingStrategy.RingAll));
+
+        Assert.Null(result.Error);
+        Assert.Equal(QueueOfferMode.ManualPickup, result.Detail!.OfferMode);
+        Assert.Equal(QueueRoutingStrategy.RingAll, result.Detail.RoutingStrategy);
+
+        await using var verify = factory.CreateDbContext();
+        var saved = await verify.Queues.SingleAsync();
+        Assert.Equal(QueueOfferMode.ManualPickup, saved.OfferMode);
+        Assert.Equal(QueueRoutingStrategy.RingAll, saved.RoutingStrategy);
+    }
+
+    [Fact]
+    public async Task Update_wijzigt_de_aanbied_instelling()
+    {
+        var factory = new TestDbContextFactory();
+        await using var db = factory.CreateDbContext();
+        var created = await AdminApi.CreateQueueAsync(db, Req(name: "sales"));
+
+        var result = await AdminApi.UpdateQueueAsync(db, created.Detail!.Id, Req(name: "sales",
+            offerMode: QueueOfferMode.AutoDispatch, routingStrategy: QueueRoutingStrategy.Linear));
+
+        Assert.NotNull(result);
+        Assert.Equal(QueueRoutingStrategy.Linear, result!.Detail!.RoutingStrategy);
     }
 }
