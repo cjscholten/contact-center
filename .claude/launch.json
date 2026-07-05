@@ -18,6 +18,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "serve", "poc-agent", "-l", "3210"],
       "port": 3210
+    },
+    {
+      "name": "website",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "website", "-l", "3211"],
+      "port": 3211
     }
   ]
 }

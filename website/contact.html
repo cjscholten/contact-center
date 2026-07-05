@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contact — Zetadesk</title>
+  <meta name="description" content="Neem contact op met Zetadesk voor een demo, een technische kennismaking of een vraag over zelf hosten." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="index.html">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="28" height="28" rx="7" fill="#2c4b80"/>
+        <path d="M8 9h12l-9 10h9" stroke="#eef3ff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      Zetadesk
+    </a>
+    <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="site-nav">
+      <a href="index.html">Home</a>
+      <a href="techniek.html">Techniek</a>
+      <a href="contact.html" class="active">Contact</a>
+      <a href="contact.html" class="btn btn-primary">Vraag een demo aan</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <div class="hero">
+    <div class="container" style="grid-template-columns: 1fr;">
+      <div>
+        <h1>Neem contact op</h1>
+        <p class="lead">
+          Benieuwd of Zetadesk bij jouw organisatie past? Plan een demo of stel je
+          vraag — je krijgt antwoord van iemand die het systeem zelf gebouwd heeft.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="container">
+      <div class="contact-grid">
+
+        <form class="form-card" id="contact-form">
+          <div class="field">
+            <label for="naam">Naam</label>
+            <input id="naam" name="naam" type="text" required autocomplete="name" />
+          </div>
+          <div class="field">
+            <label for="email">E-mailadres</label>
+            <input id="email" name="email" type="email" required autocomplete="email" />
+          </div>
+          <div class="field">
+            <label for="organisatie">Organisatie <small>(optioneel)</small></label>
+            <input id="organisatie" name="organisatie" type="text" autocomplete="organization" />
+          </div>
+          <div class="field">
+            <label for="bericht">Bericht</label>
+            <textarea id="bericht" name="bericht" rows="6" required
+              placeholder="Bijvoorbeeld: we zoeken een contactcenter voor 12 agents en willen graag een demo."></textarea>
+          </div>
+          <button class="btn btn-primary" type="submit">Verstuur bericht</button>
+          <p class="form-note">
+            Versturen opent je eigen e-mailprogramma met het bericht al ingevuld —
+            je gegevens gaan alleen naar ons, niet naar derden.
+          </p>
+        </form>
+
+        <aside class="contact-aside">
+          <div class="card">
+            <h3>Direct mailen</h3>
+            <p>Liever zonder formulier?<br />
+               <a href="mailto:info@zetadesk.net">info@zetadesk.net</a></p>
+          </div>
+          <div class="card">
+            <h3>Demo op je eigen nummer</h3>
+            <p>Tijdens een demo richten we live een wachtrij in en bel je binnen een
+               kwartier via je eigen browser. Neem gerust je eigen headset mee.</p>
+          </div>
+          <div class="card">
+            <h3>Technische kennismaking</h3>
+            <p>Met je IT-team de diepte in over trunks, tenants en hosting?
+               Lees eerst de <a href="techniek.html">techniekpagina</a> en plan
+               daarna een sessie.</p>
+          </div>
+        </aside>
+
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <span>© 2026 Zetadesk</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="techniek.html">Techniek</a>
+      <a href="contact.html">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>
