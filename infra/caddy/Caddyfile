@@ -5,15 +5,6 @@
 	email {$CADDY_ACME_EMAIL}
 }
 
-# Marketing-website (statisch, uit website/ in de repo — gemount in docker-compose).
-# Apex + www; extensieloze URL's werken via try_files (bv. /techniek -> techniek.html).
-# Vereist DNS-A-records voor de apex en www. -> VM-IP.
-{$CC_DOMAIN}, www.{$CC_DOMAIN} {
-	root * /srv/website
-	try_files {path} {path}.html
-	file_server
-}
-
 # Backend-API + SignalR-hub (wss gaat vanzelf mee via de WebSocket-upgrade).
 api.{$CC_DOMAIN} {
 	reverse_proxy localhost:5080
