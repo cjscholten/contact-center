@@ -14,14 +14,14 @@ Gedeeld: `styles.css` (kleuren uit het Mantine-thema in
 
 ## Deploy
 
-De map wordt read-only in de Caddy-container gemount (`infra/docker-compose.yml`)
-en geserveerd door het apex-blok in `infra/caddy/Caddyfile`. Vereist:
+De site draait op **externe hosting** (niet op de VM): upload de zes bestanden
+hierboven (alles behalve deze README) naar de webroot. Er is geen build-step en
+geen serverconfiguratie nodig; de onderlinge links gebruiken `.html`-extensies
+en werken dus op elke statische hosting.
 
-1. DNS-A-records voor `<CC_DOMAIN>` (apex) en `www.<CC_DOMAIN>` → het VM-IP.
-2. `docker compose up -d caddy` (of een volledige `up -d`) na wijzigingen aan
-   compose/Caddyfile; pure content-wijzigingen zijn direct zichtbaar via de mount
-   zodra de repo op de VM gepulld is.
+Het apex-blok in de Caddyfile en de website-mount in docker-compose zijn
+verwijderd toen de hosting verhuisde (juli 2026) — de apex-DNS wijst niet meer
+naar de VM.
 
 Lokaal bekijken: open `index.html` direct in de browser, of serveer de map
-(bv. `npx serve website`). Extensieloze URL's (`/techniek`) werken alleen achter
-Caddy (`try_files`); de onderlinge links gebruiken daarom `.html`.
+(bv. `npx serve website`, of de launch-config `website` op poort 3211).
