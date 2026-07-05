@@ -63,6 +63,8 @@ services:
       CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?zet CADDY_ACME_EMAIL in infra/.env (Let's Encrypt-notificaties)}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Statische marketing-site op de apex ({CC_DOMAIN} + www) — zie website/README.md.
+      - ../website:/srv/website:ro
       - caddy_data:/data
       - caddy_config:/config
 

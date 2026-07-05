@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Techniek — Zetadesk</title>
+  <meta name="description" content="Hoe Zetadesk werkt: WebRTC in de browser, Asterisk-telefonie, een .NET-backend met realtime updates en single sign-on via Keycloak. Zelf te hosten met Docker Compose." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="index.html">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="28" height="28" rx="7" fill="#2c4b80"/>
+        <path d="M8 9h12l-9 10h9" stroke="#eef3ff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      Zetadesk
+    </a>
+    <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="site-nav">
+      <a href="index.html">Home</a>
+      <a href="techniek.html" class="active">Techniek</a>
+      <a href="contact.html">Contact</a>
+      <a href="contact.html" class="btn btn-primary">Vraag een demo aan</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <div class="hero">
+    <div class="container" style="grid-template-columns: 1fr;">
+      <div>
+        <h1>Geen black box.<br /><em>Gewoon goede techniek.</em></h1>
+        <p class="lead">
+          Zetadesk is gebouwd op open standaarden en bewezen open-sourcecomponenten.
+          Alles draait op je eigen infrastructuur en is tot op de laatste laag inzichtelijk.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">Architectuur</span>
+        <h2>Van beller tot browser</h2>
+        <p>Een inkomend gesprek komt via je SIP-trunk binnen, de telefoniekern zet het in
+           de juiste wachtrij en de agent neemt op — rechtstreeks in de browser, via een
+           versleutelde WebRTC-verbinding.</p>
+      </div>
+
+      <div class="arch">
+        <svg viewBox="0 0 960 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Architectuurdiagram van Zetadesk">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#5f7cb8"/>
+            </marker>
+          </defs>
+
+          <!-- PSTN / trunk -->
+          <rect x="20" y="140" width="150" height="70" rx="10" fill="#eef3ff" stroke="#94a8d0"/>
+          <text x="95" y="170" text-anchor="middle" font-size="15" font-weight="600" fill="#2c4b80">Telefoonnet</text>
+          <text x="95" y="190" text-anchor="middle" font-size="12" fill="#4a5872">SIP-trunk / SBC</text>
+
+          <!-- Telefoniekern -->
+          <rect x="250" y="120" width="180" height="110" rx="10" fill="#fff" stroke="#2c4b80" stroke-width="1.5"/>
+          <text x="340" y="152" text-anchor="middle" font-size="15" font-weight="600" fill="#2c4b80">Telefoniekern</text>
+          <text x="340" y="174" text-anchor="middle" font-size="12" fill="#4a5872">Asterisk</text>
+          <text x="340" y="192" text-anchor="middle" font-size="12" fill="#4a5872">wachtrijen · media</text>
+          <text x="340" y="210" text-anchor="middle" font-size="12" fill="#4a5872">WebRTC-bridge</text>
+
+          <!-- Backend -->
+          <rect x="510" y="40" width="180" height="100" rx="10" fill="#fff" stroke="#2c4b80" stroke-width="1.5"/>
+          <text x="600" y="70" text-anchor="middle" font-size="15" font-weight="600" fill="#2c4b80">Regie-backend</text>
+          <text x="600" y="92" text-anchor="middle" font-size="12" fill="#4a5872">.NET · routering</text>
+          <text x="600" y="110" text-anchor="middle" font-size="12" fill="#4a5872">realtime events</text>
+
+          <!-- Browser -->
+          <rect x="770" y="120" width="170" height="110" rx="10" fill="#eef3ff" stroke="#94a8d0"/>
+          <text x="855" y="152" text-anchor="middle" font-size="15" font-weight="600" fill="#2c4b80">Browser</text>
+          <text x="855" y="174" text-anchor="middle" font-size="12" fill="#4a5872">ZetaDesk (agent)</text>
+          <text x="855" y="192" text-anchor="middle" font-size="12" fill="#4a5872">ZetaBeheer (admin)</text>
+          <text x="855" y="210" text-anchor="middle" font-size="12" fill="#4a5872">WebRTC-audio</text>
+
+          <!-- Onderlaag -->
+          <rect x="250" y="290" width="140" height="60" rx="10" fill="#f6f8fc" stroke="#94a8d0"/>
+          <text x="320" y="315" text-anchor="middle" font-size="13" font-weight="600" fill="#2c4b80">PostgreSQL</text>
+          <text x="320" y="333" text-anchor="middle" font-size="11" fill="#4a5872">configuratie · historie</text>
+
+          <rect x="430" y="290" width="140" height="60" rx="10" fill="#f6f8fc" stroke="#94a8d0"/>
+          <text x="500" y="315" text-anchor="middle" font-size="13" font-weight="600" fill="#2c4b80">Keycloak</text>
+          <text x="500" y="333" text-anchor="middle" font-size="11" fill="#4a5872">SSO · multi-tenant</text>
+
+          <rect x="610" y="290" width="140" height="60" rx="10" fill="#f6f8fc" stroke="#94a8d0"/>
+          <text x="680" y="315" text-anchor="middle" font-size="13" font-weight="600" fill="#2c4b80">Reverse proxy</text>
+          <text x="680" y="333" text-anchor="middle" font-size="11" fill="#4a5872">TLS-certificaten</text>
+
+          <!-- Pijlen -->
+          <line x1="170" y1="175" x2="243" y2="175" stroke="#5f7cb8" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="207" y="165" text-anchor="middle" font-size="11" fill="#4a5872">SIP</text>
+
+          <line x1="430" y1="145" x2="504" y2="105" stroke="#5f7cb8" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="452" y="112" text-anchor="middle" font-size="11" fill="#4a5872">ARI</text>
+
+          <line x1="690" y1="105" x2="766" y2="145" stroke="#5f7cb8" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="742" y="112" text-anchor="middle" font-size="11" fill="#4a5872">https / websocket</text>
+
+          <line x1="430" y1="200" x2="763" y2="200" stroke="#5f7cb8" stroke-width="2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+          <text x="600" y="190" text-anchor="middle" font-size="11" fill="#4a5872">versleutelde spraak (WebRTC / wss)</text>
+
+          <line x1="560" y1="140" x2="510" y2="285" stroke="#94a8d0" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <line x1="600" y1="140" x2="330" y2="285" stroke="#94a8d0" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <line x1="640" y1="140" x2="672" y2="285" stroke="#94a8d0" stroke-width="1.5" stroke-dasharray="5 4"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">De bouwstenen</span>
+        <h2>Bewezen componenten, slim gecombineerd</h2>
+      </div>
+      <div class="stack-list">
+        <div class="stack-item">
+          <div class="icon">☎️</div>
+          <div>
+            <h3>Asterisk als telefoniekern</h3>
+            <p>De meest gebruikte open-source telefoniecentrale ter wereld verzorgt de
+               gesprekken, wachtrijen en media. Zetadesk stuurt hem aan via de ARI-interface —
+               alle logica blijft in de backend, upgrades blijven eenvoudig.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">🌐</div>
+          <div>
+            <h3>WebRTC-softphone</h3>
+            <p>Agents bellen met SIP over een beveiligde websocket, met versleutelde audio
+               (DTLS-SRTP). Een TURN-server zorgt dat ook thuiswerkers achter strenge routers
+               probleemloos bereikbaar zijn.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">⚙️</div>
+          <div>
+            <h3>.NET-backend als regisseur</h3>
+            <p>Eén backend beslist over routering, aanbiedwijze, openingstijden en
+               agent-status. Gebeurtenissen gaan via SignalR realtime naar alle schermen —
+               geen polling, geen verversen.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">⚛️</div>
+          <div>
+            <h3>React-frontends</h3>
+            <p>ZetaDesk en ZetaBeheer zijn snelle single-page apps met een gedeeld
+               design system. Ze draaien in elke moderne browser — niets te installeren
+               of te updaten op de werkplek.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">🔑</div>
+          <div>
+            <h3>Keycloak voor identiteit</h3>
+            <p>Single sign-on via OpenID Connect. Elke organisatie krijgt een eigen,
+               strikt gescheiden realm — koppelbaar aan je bestaande identity provider,
+               zoals Entra ID.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">🗄️</div>
+          <div>
+            <h3>PostgreSQL als fundament</h3>
+            <p>Configuratie, wachtrijen en gesprekshistorie staan in een gewone
+               PostgreSQL-database. Back-uppen, rapporteren en koppelen doe je met
+               standaardgereedschap.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">🗣️</div>
+          <div>
+            <h3>Lokale tekst-naar-spraak</h3>
+            <p>Begroetingen worden op de server zelf gesynthetiseerd met neurale
+               Nederlandse stemmen (Piper). Geen cloud-TTS-dienst nodig, dus ook geen
+               tekst die het pand verlaat.</p>
+          </div>
+        </div>
+        <div class="stack-item">
+          <div class="icon">🔒</div>
+          <div>
+            <h3>Automatische TLS</h3>
+            <p>Een Caddy-reverse-proxy regelt Let's Encrypt-certificaten en termineert
+               al het https- en wss-verkeer. De telefoniekern is nooit rechtstreeks
+               vanaf internet bereikbaar.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">Zelf hosten</span>
+        <h2>Eén VM, één <code>docker compose up</code></h2>
+        <p>De hele stack — telefonie, backend, database, identiteit en proxy — draait als
+           containerset op één Linux-machine, bij jou on-premises of in je eigen cloud.
+           Koppelen aan je bestaande SIP-trunk of SBC, DNS-records zetten, klaar.
+           Geen omgeving van tientallen servers, geen verplicht beheercontract.</p>
+      </div>
+      <div class="cta-banner">
+        <div>
+          <h2>Technische vragen?</h2>
+          <p>We praten graag over trunks, tenants en TURN-servers.</p>
+        </div>
+        <a class="btn btn-light" href="contact.html">Neem contact op</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <span>© 2026 Zetadesk</span>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="techniek.html">Techniek</a>
+      <a href="contact.html">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>
