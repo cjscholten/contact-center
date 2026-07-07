@@ -79,28 +79,68 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  # Keycloak (OIDC) in dev-mode op poort 8080. Het realm 'contactcenter' wordt bij
-  # elke start (her)geïmporteerd uit het gemounte JSON — die is de bron van waarheid.
-  # Vereist een NSG-regel voor TCP 8080 (zie keycloak/README.md). Dev-only: http, geen TLS.
+  # Idempotente init: maakt de losse Keycloak-rol + database aan in de bestaande Postgres en stopt.
+  # Nodig omdat Keycloak in productie-modus een persistente DB vereist, en de Postgres-initdb-scripts
+  # niet meer draaien op een bestaand datavolume. Draait vóór Keycloak (service_completed_successfully).
+  keycloak-db-init:
+    image: postgres:17
+    container_name: cc-keycloak-db-init
+    network_mode: host
+    restart: "no"
+    depends_on:
+      - postgres
+    environment:
+      # cc is de superuser van deze Postgres-instance (POSTGRES_USER) en mag rollen/DB's aanmaken.
+      PGPASSWORD: ${POSTGRES_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?zet KEYCLOAK_DB_PASSWORD in infra/.env (zie infra/.env.example)}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        until pg_isready -h localhost -U cc -d contactcenter; do echo "wacht op postgres…"; sleep 1; done
+        psql -h localhost -U cc -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='keycloak'" | grep -q 1 \
+          || psql -h localhost -U cc -d postgres -c "CREATE ROLE keycloak LOGIN PASSWORD '$$KEYCLOAK_DB_PASSWORD'"
+        psql -h localhost -U cc -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='keycloak'" | grep -q 1 \
+          || psql -h localhost -U cc -d postgres -c "CREATE DATABASE keycloak OWNER keycloak"
+        echo "keycloak-db-init klaar."
+
+  # Keycloak (OIDC) in PRODUCTIE-modus op poort 8080, achter Caddy (TLS). Persistente Postgres-DB,
+  # vaste hostname, brute-force-detectie (realm-JSON) en seed-wachtwoorden via envsubst uit infra/.env.
+  # Realm-JSON's worden alleen bij de EERSTE start geïmporteerd (persistente DB — zie keycloak/README.md).
+  # Poort 8080 hoort niet publiek te staan; de browser bereikt Keycloak via https://auth.<CC_DOMAIN> (Caddy).
   keycloak:
-    image: quay.io/keycloak/keycloak:26.1
+    build: ./keycloak
+    image: cc-keycloak
     container_name: cc-keycloak
-    command: start-dev --import-realm
+    command: ["start", "--optimized", "--import-realm"]
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      keycloak-db-init:
+        condition: service_completed_successfully
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
-      KC_HOSTNAME_STRICT: "false"
-      # Vertrouw de X-Forwarded-*-headers van Caddy: de browser via de proxy krijgt https://auth.-URL's,
-      # interne backend-calls (localhost:8080, zonder die headers) blijven localhost (dynamic backchannel).
+      # Persistente database (i.p.v. de ephemeral H2 van dev-mode). Rol/DB gemaakt door keycloak-db-init.
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://localhost:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?zet KEYCLOAK_DB_PASSWORD in infra/.env (zie infra/.env.example)}
+      # Vaste publieke hostname (productie-modus vereist dit); de browser krijgt https://auth.-URL's.
+      KC_HOSTNAME: https://auth.${CC_DOMAIN:?zet CC_DOMAIN in infra/.env (bijv. zetadesk.net)}
+      # Backend haalt de OIDC-metadata intern op localhost:8080 op; dynamische backchannel houdt die
+      # interne calls op localhost terwijl de browser-issuer https://auth.- blijft (issuer-validatie op realm).
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      # TLS wordt door Caddy getermineerd; Keycloak draait http achter de proxy en vertrouwt X-Forwarded-*.
+      KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: xforwarded
+      # Seed-wachtwoord voor de fixture-gebruikers; het entrypoint vult het via envsubst in de realm-JSON's.
+      KEYCLOAK_SEED_PASSWORD: ${KEYCLOAK_SEED_PASSWORD:?zet KEYCLOAK_SEED_PASSWORD in infra/.env (zie infra/.env.example)}
     volumes:
-      # Alle realm-JSON's in de import-map worden bij --import-realm geladen: de default-tenant
-      # (contactcenter) en de voorbeeld-tenant (tenant-acme). Extra klant-realms voeg je toe met
-      # keycloak/provision-tenant.sh (geen herstart nodig).
-      - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import/contactcenter-realm.json:ro
-      - ./keycloak/tenant-acme-realm.json:/opt/keycloak/data/import/tenant-acme-realm.json:ro
+      # Realm-templates (met ${KEYCLOAK_SEED_PASSWORD}-placeholder) worden door het entrypoint gerenderd
+      # naar de import-map. Extra klant-realms voeg je toe met keycloak/provision-tenant.sh.
+      - ./keycloak/contactcenter-realm.json:/opt/keycloak/data/import-templates/contactcenter-realm.json:ro
+      - ./keycloak/tenant-acme-realm.json:/opt/keycloak/data/import-templates/tenant-acme-realm.json:ro
 
   # Backend-API (.NET) op poort 5080, naast Asterisk/Postgres/Keycloak. Via network_mode host
   # zijn die op localhost bereikbaar (de appsettings-defaults), dus géén VmHost hier — dat zou

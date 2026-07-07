@@ -1,10 +1,18 @@
 {
   "realm": "__REALM__",
   "enabled": true,
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "loginTheme": "keycloak",
   "accessTokenLifespan": 3600,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 20,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
   "roles": {
     "realm": [
       { "name": "agent", "description": "Contactcenter-agent (ZetaDesk)" },
@@ -18,7 +26,7 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "redirectUris": ["__ZETADESK_REDIRECT__"],
       "webOrigins": ["__ZETADESK_ORIGIN__"],
       "attributes": {
@@ -32,7 +40,7 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "redirectUris": ["__ZETABEHEER_REDIRECT__"],
       "webOrigins": ["__ZETABEHEER_ORIGIN__"],
       "attributes": {

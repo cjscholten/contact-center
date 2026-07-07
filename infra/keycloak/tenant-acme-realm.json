@@ -1,10 +1,18 @@
 {
   "realm": "tenant-acme",
   "enabled": true,
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "loginTheme": "keycloak",
   "accessTokenLifespan": 3600,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 20,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "minimumQuickLoginWaitSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
   "roles": {
     "realm": [
       { "name": "agent", "description": "Contactcenter-agent (ZetaDesk)" },
@@ -18,7 +26,7 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "redirectUris": ["http://localhost:5173/*"],
       "webOrigins": ["http://localhost:5173"],
       "attributes": {
@@ -32,7 +40,7 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "redirectUris": ["http://localhost:5174/*"],
       "webOrigins": ["http://localhost:5174"],
       "attributes": {
@@ -49,7 +57,7 @@
       "emailVerified": true,
       "firstName": "Acme",
       "lastName": "Agent 2001",
-      "credentials": [{ "type": "password", "value": "changeme-dev", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_SEED_PASSWORD}", "temporary": false }],
       "realmRoles": ["agent"]
     },
     {
@@ -59,7 +67,7 @@
       "emailVerified": true,
       "firstName": "Acme",
       "lastName": "Beheer",
-      "credentials": [{ "type": "password", "value": "changeme-dev", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "${KEYCLOAK_SEED_PASSWORD}", "temporary": false }],
       "realmRoles": ["admin"]
     }
   ]
