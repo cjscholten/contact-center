@@ -61,6 +61,9 @@ services:
     environment:
       CC_DOMAIN: ${CC_DOMAIN:?zet CC_DOMAIN in infra/.env (bijv. zetadesk.net)}
       CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?zet CADDY_ACME_EMAIL in infra/.env (Let's Encrypt-notificaties)}
+      # H-2: vertrouwde IP's voor de Keycloak-adminconsole (/admin* + /realms/master*). Spatie-
+      # gescheiden CIDR's; default = alleen localhost (console publiek dicht tot je je IP invult).
+      KC_ADMIN_ALLOW_CIDR: ${KC_ADMIN_ALLOW_CIDR:-127.0.0.1/8}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -12,6 +12,16 @@ api.{$CC_DOMAIN} {
 
 # Keycloak (OIDC). Caddy zet X-Forwarded-*; Keycloak bouwt hiermee https://auth.-URL's.
 auth.{$CC_DOMAIN} {
+	# H-2: de adminconsole + admin-REST (/admin*) en het master-realm (/realms/master*) mogen
+	# ALLEEN vanaf vertrouwde IP's (KC_ADMIN_ALLOW_CIDR, spatie-gescheiden CIDR's). Alle andere
+	# paden — de OIDC-login-endpoints van de tenant-realms, themes/resources — blijven publiek.
+	# Default = alleen localhost, dus tot je je beheer-IP in infra/.env zet staat de console dicht.
+	@admin_forbidden {
+		path /admin /admin/* /realms/master /realms/master/*
+		not remote_ip {$KC_ADMIN_ALLOW_CIDR:127.0.0.1/8}
+	}
+	respond @admin_forbidden "Forbidden" 403
+
 	reverse_proxy localhost:8080
 }
 
