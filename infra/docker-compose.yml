@@ -122,7 +122,8 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
       # Persistente database (i.p.v. de ephemeral H2 van dev-mode). Rol/DB gemaakt door keycloak-db-init.
-      KC_DB: postgres
+      # KC_DB (vendor) is build-time en al in de image gebakken (Dockerfile: kc.sh build); hier alleen
+      # de runtime-verbinding. Bij 'start --optimized' mag je de build-time optie niet opnieuw zetten.
       KC_DB_URL: jdbc:postgresql://localhost:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?zet KEYCLOAK_DB_PASSWORD in infra/.env (zie infra/.env.example)}
