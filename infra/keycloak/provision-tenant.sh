@@ -20,7 +20,8 @@ set -euo pipefail
 KC_CONTAINER="${KC_CONTAINER:-cc-keycloak}"
 KC_URL="${KC_URL:-http://localhost:8080}"
 KC_ADMIN="${KC_ADMIN:-admin}"
-KC_ADMIN_PW="${KC_ADMIN_PW:-changeme-dev}"
+# Geen default-wachtwoord in git: zet KC_ADMIN_PW in de omgeving (= KEYCLOAK_ADMIN_PASSWORD uit infra/.env).
+KC_ADMIN_PW="${KC_ADMIN_PW:?zet KC_ADMIN_PW in de omgeving (het Keycloak-admin-wachtwoord)}"
 PG_CONTAINER="${PG_CONTAINER:-cc-postgres}"
 
 SLUG="" REALM="" DISPLAY="" BASE_URL=""
