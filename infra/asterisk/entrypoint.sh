@@ -5,12 +5,14 @@
 set -e
 
 : "${ARI_PASSWORD:?ARI_PASSWORD ontbreekt — zet infra/.env (zie infra/.env.example)}"
-: "${AGENT_SIP_PASSWORD:?AGENT_SIP_PASSWORD ontbreekt — zet infra/.env (zie infra/.env.example)}"
+# H-4: per-agent SIP-wachtwoorden (elk uniek) i.p.v. één gedeeld AGENT_SIP_PASSWORD.
+: "${AGENT1001_SIP_PASSWORD:?AGENT1001_SIP_PASSWORD ontbreekt — zet infra/.env (zie infra/.env.example)}"
+: "${AGENT1002_SIP_PASSWORD:?AGENT1002_SIP_PASSWORD ontbreekt — zet infra/.env (zie infra/.env.example)}"
 : "${SBC_IP:?SBC_IP ontbreekt — zet infra/.env (zie infra/.env.example)}"
 
 for f in ari.conf pjsip.conf; do
-  # Alleen deze drie variabelen vervangen; overige $-tekens in de config blijven ongemoeid.
-  envsubst '${ARI_PASSWORD} ${AGENT_SIP_PASSWORD} ${SBC_IP}' \
+  # Alleen deze variabelen vervangen; overige $-tekens in de config blijven ongemoeid.
+  envsubst '${ARI_PASSWORD} ${AGENT1001_SIP_PASSWORD} ${AGENT1002_SIP_PASSWORD} ${SBC_IP}' \
     < "/etc/asterisk/templates/$f" > "/etc/asterisk/$f"
 done
 

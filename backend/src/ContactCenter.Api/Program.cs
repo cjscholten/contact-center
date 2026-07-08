@@ -85,6 +85,8 @@ builder.Services.AddHostedService<AriEventListener>();
 var keycloakOptions = new KeycloakOptions
 {
     BaseUrl = builder.Configuration["Keycloak:BaseUrl"] ?? "http://localhost:8080",
+    AllowedClients = builder.Configuration.GetSection("Keycloak:AllowedClients").Get<string[]>()
+        ?? ["zetadesk", "zetabeheer"],
 };
 builder.Services.AddSingleton(keycloakOptions);
 builder.Services.AddSingleton<KeycloakRealmKeys>();
@@ -116,14 +118,24 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
             NameClaimType = "preferred_username",
             RoleClaimType = ClaimTypes.Role,
         };
-        // SignalR stuurt het token mee via de query-string bij de WebSocket-handshake.
         options.Events = new JwtBearerEvents
         {
+            // SignalR stuurt het token mee via de query-string bij de WebSocket-handshake.
             OnMessageReceived = context =>
             {
                 var accessToken = context.Request.Query["access_token"];
                 if (!string.IsNullOrEmpty(accessToken) && context.HttpContext.Request.Path.StartsWithSegments("/hub"))
                     context.Token = accessToken;
+                return Task.CompletedTask;
+            },
+            // H-3: audience-controle via azp. Keycloak's default-aud ("account") is nutteloos, dus
+            // valideren we dat het token is uitgegeven aan één van onze eigen clients. Zonder dit zou
+            // elk realm-token met de juiste rol (ook van een andere client) geaccepteerd worden.
+            OnTokenValidated = context =>
+            {
+                var azp = context.Principal?.FindFirstValue("azp");
+                if (azp is null || !keycloakOptions.AllowedClients.Contains(azp, StringComparer.Ordinal))
+                    context.Fail($"Token niet uitgegeven aan een toegestane client (azp '{azp}').");
                 return Task.CompletedTask;
             },
         };

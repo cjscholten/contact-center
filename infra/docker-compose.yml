@@ -10,7 +10,9 @@ services:
     environment:
       # entrypoint.sh vult hiermee de config-sjablonen (ari.conf/pjsip.conf) in. Uit infra/.env.
       ARI_PASSWORD: ${ARI_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
-      AGENT_SIP_PASSWORD: ${AGENT_SIP_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
+      # H-4: per-agent SIP-wachtwoorden (elk uniek) i.p.v. één gedeeld wachtwoord.
+      AGENT1001_SIP_PASSWORD: ${AGENT1001_SIP_PASSWORD:?zet AGENT1001_SIP_PASSWORD in infra/.env (zie infra/.env.example)}
+      AGENT1002_SIP_PASSWORD: ${AGENT1002_SIP_PASSWORD:?zet AGENT1002_SIP_PASSWORD in infra/.env (zie infra/.env.example)}
       # IP van het SBC-interface richting Asterisk (vervangt de oude handmatige sed in pjsip.conf).
       SBC_IP: ${SBC_IP:?zet SBC_IP in infra/.env (zie infra/.env.example)}
       # ICE-NAT-mapping voor WebRTC (rtp.conf): privé => publiek IP van de VM. Optioneel — leeg
@@ -165,9 +167,12 @@ services:
       # uit appsettings.json (daar staan alleen secret-loze defaults). Env overschrijft die.
       ConnectionStrings__ContactCenter: "Host=localhost;Port=5432;Database=contactcenter;Username=cc;Password=${POSTGRES_PASSWORD}"
       Ari__Password: ${ARI_PASSWORD:?kopieer infra/.env.example naar infra/.env en vul de secrets in}
-      # SIP-wachtwoord voor nieuw aangemaakte/geseede agents; moet gelijk zijn aan AGENT_SIP_PASSWORD
-      # (pjsip.conf), zodat de browser-registratie klopt. Uit infra/.env.
+      # H-4: per-agent SIP-wachtwoorden. De statische agents (agent1001/1002) krijgen elk hun eigen
+      # waarde — gelijk aan pjsip.conf — zodat de browser-registratie klopt. DefaultSipPassword is de
+      # terugval voor overige/nieuw aangemaakte agents (nog geen eigen PJSIP-endpoint). Uit infra/.env.
       Agents__DefaultSipPassword: ${AGENT_SIP_PASSWORD}
+      Agents__Agent1001SipPassword: ${AGENT1001_SIP_PASSWORD}
+      Agents__Agent1002SipPassword: ${AGENT1002_SIP_PASSWORD}
       # TURN: hetzelfde geheim als coturn (tijdelijke creds) + de publieke coturn-host voor de browser.
       Turn__Secret: ${TURN_SECRET}
       Turn__Host: ${TURN_PUBLIC_HOST:?zet TURN_PUBLIC_HOST in infra/.env (publieke coturn-IP voor de browser)}

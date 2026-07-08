@@ -14,8 +14,12 @@ public static class DatabaseInitializer
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseInitializer");
         var dbFactory = services.GetRequiredService<IDbContextFactory<CcDbContext>>();
         var tts = services.GetRequiredService<ITtsService>();
-        // SIP-wachtwoord voor geseede agents uit config (env Agents__DefaultSipPassword); niet in git.
-        var defaultSipPassword = services.GetRequiredService<IConfiguration>()["Agents:DefaultSipPassword"] ?? "";
+        // SIP-wachtwoorden voor geseede agents uit config (env), niet in git. H-4: de statische agents
+        // krijgen elk hun EIGEN wachtwoord (gelijk aan pjsip.conf); Default is de terugval voor de rest.
+        var config = services.GetRequiredService<IConfiguration>();
+        var defaultSipPassword = config["Agents:DefaultSipPassword"] ?? "";
+        var agent1001Password = config["Agents:Agent1001SipPassword"] ?? defaultSipPassword;
+        var agent1002Password = config["Agents:Agent1002SipPassword"] ?? defaultSipPassword;
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -23,7 +27,7 @@ public static class DatabaseInitializer
             {
                 await using var db = await dbFactory.CreateDbContextAsync();
                 await db.Database.MigrateAsync();
-                await SeedAsync(db, logger, defaultSipPassword);
+                await SeedAsync(db, logger, defaultSipPassword, agent1001Password, agent1002Password);
                 await RegeneratePromptsAsync(db, tts, logger);
                 logger.LogInformation("Database gemigreerd en gereed");
                 return;
@@ -44,12 +48,13 @@ public static class DatabaseInitializer
 
     // De seed draait zonder tenant-context, dus de tenant-query-filter zou alles wegfilteren:
     // overal IgnoreQueryFilters() en TenantId expliciet zetten.
-    private static async Task SeedAsync(CcDbContext db, ILogger logger, string sipPassword)
+    private static async Task SeedAsync(
+        CcDbContext db, ILogger logger, string sipPassword, string agent1001Password, string agent1002Password)
     {
         var defaultTenant = await EnsureTenantAsync(db, "default", "Standaard", "contactcenter", logger);
         var acmeTenant = await EnsureTenantAsync(db, "acme", "Acme BV", "tenant-acme", logger);
 
-        await SeedDefaultTenantAsync(db, defaultTenant.Id, logger, sipPassword);
+        await SeedDefaultTenantAsync(db, defaultTenant.Id, logger, agent1001Password, agent1002Password);
         await SeedAcmeTenantAsync(db, acmeTenant.Id, logger, sipPassword);
     }
 
@@ -67,7 +72,8 @@ public static class DatabaseInitializer
         return tenant;
     }
 
-    private static async Task SeedDefaultTenantAsync(CcDbContext db, int tenantId, ILogger logger, string sipPassword)
+    private static async Task SeedDefaultTenantAsync(
+        CcDbContext db, int tenantId, ILogger logger, string agent1001Password, string agent1002Password)
     {
         if (!await db.Queues.IgnoreQueryFilters().AnyAsync(q => q.TenantId == tenantId))
         {
@@ -97,7 +103,7 @@ public static class DatabaseInitializer
                     Name = "agent1001",
                     DisplayName = "Agent 1001",
                     Endpoint = "PJSIP/agent1001",
-                    SipPassword = sipPassword,
+                    SipPassword = agent1001Password,
                     QueueAssignments = [.. queueIds.Values.Select(id => new AgentQueueAssignment { QueueConfigId = id })],
                 },
                 new Agent
@@ -106,7 +112,7 @@ public static class DatabaseInitializer
                     Name = "agent1002",
                     DisplayName = "Agent 1002",
                     Endpoint = "PJSIP/agent1002",
-                    SipPassword = sipPassword,
+                    SipPassword = agent1002Password,
                     QueueAssignments = [new AgentQueueAssignment { QueueConfigId = queueIds["support"] }],
                 });
             await db.SaveChangesAsync();
