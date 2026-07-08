@@ -32,6 +32,21 @@ public static partial class AdminApi
     {
         var admin = app.MapGroup("/api/admin").RequireAuthorization("admin");
 
+        // M-5: audit-trail van beheer-mutaties (wie/wat/wanneer/uitkomst) naar de container-logs
+        // (append-only sink). Alleen muterende verzoeken; reads worden niet geaudit.
+        var auditLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Audit");
+        admin.AddEndpointFilter(async (ctx, next) =>
+        {
+            var http = ctx.HttpContext;
+            var method = http.Request.Method;
+            var result = await next(ctx);
+            if (method is "POST" or "PUT" or "DELETE")
+                auditLogger.LogInformation("AUDIT {User} {Method} {Path} → {Status}",
+                    http.User.Identity?.Name ?? "?", method, http.Request.Path.Value,
+                    (result as IStatusCodeHttpResult)?.StatusCode);
+            return result;
+        });
+
         var queues = admin.MapGroup("/queues");
 
         queues.MapGet("", async (IDbContextFactory<CcDbContext> factory, QueueDecisionService decide, CancellationToken ct) =>

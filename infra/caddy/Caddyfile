@@ -5,13 +5,30 @@
 	email {$CADDY_ACME_EMAIL}
 }
 
+# M-2: gedeelde security-headers. HSTS dwingt HTTPS af, nosniff blokkeert MIME-sniffing,
+# no-referrer voorkomt dat URL's (incl. querystrings) via de Referer lekken, en -Server
+# vermindert fingerprinting. Frame-/CSP-headers laten we per site aan de app over.
+(sec_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
 # Backend-API + SignalR-hub (wss gaat vanzelf mee via de WebSocket-upgrade).
 api.{$CC_DOMAIN} {
+	import sec_headers
+	# Pure JSON-API, nooit in een frame — clickjacking hard uitsluiten.
+	header X-Frame-Options "DENY"
 	reverse_proxy localhost:5080
 }
 
 # Keycloak (OIDC). Caddy zet X-Forwarded-*; Keycloak bouwt hiermee https://auth.-URL's.
 auth.{$CC_DOMAIN} {
+	# Keycloak zet zelf frame-options/CSP voor z'n login-UI; we voegen alleen de gedeelde headers toe.
+	import sec_headers
 	# H-2: de adminconsole + admin-REST (/admin*) en het master-realm (/realms/master*) mogen
 	# ALLEEN vanaf vertrouwde IP's (KC_ADMIN_ALLOW_CIDR, spatie-gescheiden CIDR's). Alle andere
 	# paden — de OIDC-login-endpoints van de tenant-realms, themes/resources — blijven publiek.
@@ -28,6 +45,7 @@ auth.{$CC_DOMAIN} {
 # Asterisk: ALLEEN het WebSocket-endpoint /ws (SIP.js) publiek maken — niet /ari,
 # dat blijft intern (localhost) voor de backend.
 sip.{$CC_DOMAIN} {
+	import sec_headers
 	@ws path /ws /ws/*
 	handle @ws {
 		reverse_proxy localhost:8088

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using ContactCenter.Api.Admin;
 using ContactCenter.Api.Agents;
 using ContactCenter.Api.Ari;
@@ -147,10 +148,32 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("admin", p => p.RequireRole("admin"));
 });
 
-// dev: de front-ends draaien op vaste localhost-poorten; SignalR vereist AllowCredentials.
+// M-6: toegestane CORS-origins uit config (env Cors__AllowedOrigins__0=...), default de lokale
+// front-end-poorten. SignalR vereist AllowCredentials, dus geen wildcard-origin mogelijk.
+var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? ["http://localhost:5173", "http://localhost:5174"];
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.WithOrigins("http://localhost:5173", "http://localhost:5174")
-        .AllowAnyMethod().AllowAnyHeader().AllowCredentials()));
+    p.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader().AllowCredentials()));
+
+// M-4: rate-limiting (defense-in-depth naast Keycloaks brute-force-detectie). Per gebruiker
+// (of IP bij anonieme calls) een ruime vaste-venster-limiet; de SignalR-hub en /health blijven
+// ongelimiteerd (langlopend/hoogfrequent-legitiem). 429 bij overschrijding.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+    {
+        var path = http.Request.Path;
+        if (path.StartsWithSegments("/hub") || path.StartsWithSegments("/health"))
+            return RateLimitPartition.GetNoLimiter("unlimited");
+        var key = http.User.Identity?.Name ?? http.Connection.RemoteIpAddress?.ToString() ?? "anon";
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 120,
+            Window = TimeSpan.FromSeconds(10),
+        });
+    });
+});
 
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
@@ -161,6 +184,7 @@ app.UseCors();
 app.UseAuthentication();
 app.UseMiddleware<TenantMiddleware>(); // herleidt de tenant uit de token-issuer (realm)
 app.UseAuthorization();
+app.UseRateLimiter(); // M-4: na authenticatie, zodat per-gebruiker gepartitioneerd kan worden
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
