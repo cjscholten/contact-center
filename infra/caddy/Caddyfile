@@ -19,9 +19,15 @@
 
 # Backend-API + SignalR-hub (wss gaat vanzelf mee via de WebSocket-upgrade).
 api.{$CC_DOMAIN} {
-	import sec_headers
-	# Pure JSON-API, nooit in een frame — clickjacking hard uitsluiten.
-	header X-Frame-Options "DENY"
+	# Eén header-blok (twee losse header-directives combineren niet betrouwbaar in Caddy).
+	# Pure JSON-API, nooit in een frame — clickjacking hard uitsluiten met X-Frame-Options DENY.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
 	reverse_proxy localhost:5080
 }
 
