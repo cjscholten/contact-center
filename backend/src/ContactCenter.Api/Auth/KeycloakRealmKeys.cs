@@ -12,6 +12,14 @@ public sealed class KeycloakOptions
 
     /// <summary>Basis-URL waar de backend de OIDC-metadata/JWKS ophaalt (in de container: localhost).</summary>
     public string BaseUrl { get; set; } = "http://localhost:8080";
+
+    /// <summary>
+    /// Toegestane client-id's (token-claim <c>azp</c>). Keycloak's default-<c>aud</c> is "account" en
+    /// dus nutteloos voor audience-validatie; <c>azp</c> identificeert wél betrouwbaar de client die
+    /// het token kreeg. Alleen tokens van onze eigen apps worden geaccepteerd — een token voor een
+    /// andere client in dezelfde realm (ook met de juiste realm-rollen) wordt geweigerd. Zie H-3.
+    /// </summary>
+    public string[] AllowedClients { get; set; } = ["zetadesk", "zetabeheer"];
 }
 
 /// <summary>
